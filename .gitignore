@@ -1,0 +1,19 @@
+# CMake build directories
+/build/
+/cmake-build-*/
+
+# Compiler output
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.exe
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+
+# Runtime output
+*.log
