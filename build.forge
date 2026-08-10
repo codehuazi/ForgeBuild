@@ -1,0 +1,11 @@
+rule compile
+ command = g++ -std=c++20 -MMD -MF $out.d -c $in -o $out
+ depfile = $out.d
+
+rule link
+ command = g++ $in -o $out
+
+build a.o: compile a.cpp
+build b.o: compile b.cpp
+build main.o: compile main.cpp
+build app: link a.o b.o main.o

@@ -6,9 +6,15 @@ project(
     LANGUAGES CXX
 )
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+find_package(
+    Threads REQUIRED
+)
 
 add_library(
     forge_core
@@ -17,6 +23,21 @@ add_library(
         src/node.cpp
         src/edge.cpp
         src/build_graph.cpp
+        src/build_plan.cpp
+        src/manifest.cpp
+        src/string_utils.cpp
+        src/parser.cpp
+        src/builder.cpp
+        src/build_planner.cpp
+        src/executor.cpp
+        src/file_system.cpp
+        src/hash.cpp
+        src/cache_key.cpp
+        src/build_log.cpp
+        src/scheduler.cpp
+        src/depfile.cpp
+        src/deps_log.cpp
+        src/local_cache.cpp
 )
 
 target_include_directories(
@@ -31,6 +52,18 @@ target_compile_options(
         -Wall
         -Wextra
         -Wpedantic
+)
+
+add_executable(
+    forge
+    src/main.cpp
+)
+
+
+target_link_libraries(
+    forge
+    PRIVATE
+        forge_core
 )
 
 add_executable(
@@ -51,3 +84,302 @@ target_compile_options(
         -Wextra
         -Wpedantic
 )
+
+add_executable(string_demo
+    tests/string_demo.cpp
+)
+
+target_link_libraries(
+    string_demo
+    forge_core
+)
+
+add_executable(
+    parser_demo
+    tests/parser_demo.cpp
+)
+target_link_libraries(
+    parser_demo
+    forge_core
+)
+
+add_executable(builder_demo
+    tests/builder_demo.cpp
+)
+
+
+target_link_libraries(
+    builder_demo
+    forge_core
+)
+
+add_executable(
+    executor_demo
+    tests/executor_demo.cpp
+)
+
+
+target_link_libraries(
+    executor_demo
+    forge_core
+)
+
+add_executable(
+    file_system_demo
+    tests/file_system_demo.cpp
+)
+
+target_link_libraries(
+    file_system_demo
+    PRIVATE
+    forge_core
+)
+
+add_executable(
+    incremental_chain_demo
+    tests/incremental_chain_demo.cpp
+)
+
+target_link_libraries(
+    incremental_chain_demo
+    PRIVATE
+    forge_core
+)
+
+add_executable(
+    hash_demo
+    tests/hash_demo.cpp
+)
+
+target_link_libraries(
+    hash_demo
+    PRIVATE
+    forge_core
+)
+
+add_executable(
+    build_log_demo
+    tests/build_log_demo.cpp
+)
+
+target_link_libraries(
+    build_log_demo
+    PRIVATE
+    forge_core
+)
+
+add_executable(
+    command_change_demo
+    tests/command_change_demo.cpp
+)
+
+target_link_libraries(
+    command_change_demo
+    PRIVATE
+    forge_core
+)
+
+add_executable(
+    executor_build_log_demo
+    tests/executor_build_log_demo.cpp
+)
+
+target_link_libraries(
+    executor_build_log_demo
+    PRIVATE
+    forge_core
+)
+
+add_executable(
+    scheduler_demo
+    tests/scheduler_demo.cpp
+)
+
+
+target_link_libraries(
+    scheduler_demo
+    PRIVATE
+    forge_core
+)
+
+add_executable(
+    mutex_demo
+    tests/mutex_demo.cpp
+)
+
+add_executable(
+    condition_variable_demo
+    tests/condition_variable_demo.cpp
+)
+
+target_link_libraries(
+    condition_variable_demo
+    PRIVATE
+    Threads::Threads
+)
+
+add_executable(
+    task_queue_demo
+    tests/task_queue_demo.cpp
+)
+
+target_link_libraries(
+    task_queue_demo
+    PRIVATE
+    Threads::Threads
+)
+
+add_executable(
+    two_workers_demo
+    tests/two_workers_demo.cpp
+)
+
+target_link_libraries(
+    two_workers_demo
+    PRIVATE
+    Threads::Threads
+)
+
+add_executable(
+    dependency_queue_demo
+    tests/dependency_queue_demo.cpp
+)
+
+target_link_libraries(
+    dependency_queue_demo
+    PRIVATE
+    Threads::Threads
+)
+
+add_executable(
+    depfile_demo
+    tests/depfile_demo.cpp
+)
+
+
+target_link_libraries(
+    depfile_demo
+    forge_core
+)
+
+add_executable(
+    deps_log_demo
+    tests/deps_log_demo.cpp
+)
+
+
+target_link_libraries(
+    deps_log_demo
+    forge_core
+)
+
+
+add_executable(
+    dynamic_dependency_demo
+    tests/dynamic_dependency_demo.cpp
+)
+
+
+target_link_libraries(
+    dynamic_dependency_demo
+    PRIVATE
+        forge_core
+)
+
+add_executable(
+    real_depfile_build_demo
+    tests/real_depfile_build_demo.cpp
+)
+
+
+target_link_libraries(
+    real_depfile_build_demo
+    PRIVATE
+        forge_core
+)
+
+add_executable(
+    scheduler_guard_demo
+    tests/scheduler_guard_demo.cpp
+)
+
+
+target_link_libraries(
+    scheduler_guard_demo
+    PRIVATE
+        forge_core
+)
+
+add_executable(
+    scheduler_multi_output_demo
+    tests/scheduler_multi_output_demo.cpp
+)
+
+
+target_link_libraries(
+    scheduler_multi_output_demo
+    PRIVATE
+        forge_core
+)
+
+add_executable(
+    scheduler_failure_demo
+    tests/scheduler_failure_demo.cpp
+)
+
+add_executable(
+    local_cache_demo
+    tests/local_cache_demo.cpp
+)
+
+target_link_libraries(
+    local_cache_demo
+    PRIVATE
+    forge_core
+)
+
+
+target_link_libraries(
+    scheduler_failure_demo
+    PRIVATE
+        forge_core
+)
+
+if(BUILD_TESTING)
+
+    add_test(
+        NAME scheduler_guard
+        COMMAND scheduler_guard_demo
+    )
+
+    add_test(
+        NAME scheduler_multi_output
+        COMMAND scheduler_multi_output_demo
+    )
+
+    add_test(
+        NAME scheduler_failure
+        COMMAND scheduler_failure_demo
+    )
+
+    add_test(
+        NAME hash
+        COMMAND hash_demo
+    )
+
+    add_test(
+        NAME local_cache
+        COMMAND local_cache_demo
+    )
+
+    set_tests_properties(
+        scheduler_guard
+        scheduler_multi_output
+        scheduler_failure
+        hash
+        local_cache
+        PROPERTIES
+            TIMEOUT 5
+    )
+
+endif()

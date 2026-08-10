@@ -1,0 +1,1376 @@
+Day10 完整总结：GCC/Clang Depfile 动态依赖追踪
+
+Day10 的核心目标是：
+
+让 ForgeBuild 不仅知道源文件依赖，还能从编译器生成的 depfile 中获取真实头文件依赖，并将这些依赖用于后续增量构建。
+
+最终实现的完整链路是：
+
+Forgefile
+   ↓
+Parser 解析 depfile 字段
+   ↓
+Rule 保存 depfile 模板
+   ↓
+Edge 展开 $in / $out
+   ↓
+Executor 执行 g++
+   ↓
+GCC 生成 .d 文件
+   ↓
+Depfile 解析器读取依赖
+   ↓
+DepsLog 持久化 output → inputs
+   ↓
+Builder 使用动态依赖做脏检查
+   ↓
+向下游传播
+   ↓
+生成最小受影响构建计划
+一、Day10 要解决的实际问题
+
+在 Day10 之前，ForgeBuild 的显式构建图只能知道：
+
+main.cpp
+   ↓
+main.o
+
+这是因为 Forgefile 中写的是：
+
+build main.o: compile main.cpp
+
+但是实际 C++ 编译中，main.o 往往还依赖：
+
+config.h
+math.h
+project/common.hpp
+
+例如：
+
+#include "config.h"
+#include "math.h"
+
+真实依赖应该是：
+
+main.cpp ─┐
+config.h ─┼──→ main.o
+math.h ───┘
+
+如果 ForgeBuild 不知道头文件依赖，就会出现错误：
+
+修改 config.h
+    ↓
+ForgeBuild 认为 main.cpp 没变
+    ↓
+跳过编译
+    ↓
+main.o 仍然包含旧代码
+
+这会导致增量构建结果不正确。
+
+因此，Day10 的本质不是简单解析一个文件，而是解决：
+
+C/C++ 构建系统怎样准确获得真实依赖关系。
+
+二、为什么不能自己扫描 #include
+
+最直接的想法可能是扫描源码：
+
+#include "config.h"
+
+然后把 config.h 加入依赖。
+
+但真实 C/C++ 依赖比文本扫描复杂得多。
+
+例如条件编译：
+
+#ifdef USE_FAST_MATH
+#include "fast_math.h"
+#else
+#include "normal_math.h"
+#endif
+
+实际依赖取决于编译参数：
+
+-DUSE_FAST_MATH
+
+还有宏展开：
+
+#define HEADER_FILE "config.h"
+#include HEADER_FILE
+
+还有 include 搜索路径：
+
+-Iinclude
+-Ithird_party/include
+
+以及：
+
+#include <library/header.hpp>
+
+单纯扫描源码无法准确复现编译器的预处理行为。
+
+因此正确方式是：
+
+让编译器自己告诉构建系统实际使用了哪些依赖文件。
+
+GCC/Clang 可以通过：
+
+-MMD -MF main.o.d
+
+生成依赖文件。
+
+三、GCC depfile 的作用
+
+编译命令：
+
+g++ -MMD -MF main.o.d -c main.cpp -o main.o
+
+参数含义：
+
+-MMD
+
+让 GCC 生成用户源码和用户头文件依赖，通常不记录大量系统标准库头文件。
+
+-MF main.o.d
+
+指定依赖文件输出路径。
+
+编译后会同时生成：
+
+main.o
+main.o.d
+
+main.o.d 内容可能是：
+
+main.o: main.cpp config.h math.h
+
+含义是：
+
+输出：
+main.o
+
+依赖：
+main.cpp
+config.h
+math.h
+
+也可能因为文件较多而使用多行格式：
+
+main.o: main.cpp \
+ config.h \
+ math.h
+
+反斜杠加换行表示当前逻辑行继续。
+
+四、Depfile 模块
+1. 模块职责
+
+Depfile 只负责：
+
+将编译器生成的 .d 文件解析成结构化数据。
+
+内部结构：
+
+class Depfile
+{
+public:
+    bool parse(const std::string& text);
+
+    bool load(const std::string& file_path);
+
+    const std::string& output() const;
+
+    const std::vector<std::string>& inputs() const;
+
+private:
+    std::string output_;
+
+    std::vector<std::string> inputs_;
+};
+
+解析结果例如：
+
+output_ = "main.o"
+
+inputs_ =
+[
+    "main.cpp",
+    "config.h",
+    "math.h"
+]
+2. parse() 的基本过程
+
+基础格式：
+
+main.o: main.cpp config.h math.h
+
+解析过程：
+
+找到第一个冒号
+    ↓
+左边作为 output
+    ↓
+右边按空白分词
+    ↓
+得到 inputs
+
+核心思想：
+
+const std::size_t colon =
+    normalized.find(':');
+
+然后：
+
+output_ =
+    normalized.substr(0, colon);
+
+依赖部分：
+
+std::string input_text =
+    normalized.substr(colon + 1);
+
+再通过：
+
+std::stringstream stream(input_text);
+
+逐个读取依赖。
+
+3. load() 的职责
+
+load() 不重复实现解析逻辑，而是：
+
+打开文件
+    ↓
+读取全部文本
+    ↓
+调用 parse()
+
+结构类似：
+
+bool Depfile::load(
+    const std::string& file_path
+)
+{
+    std::ifstream input(file_path);
+
+    if (!input)
+    {
+        return false;
+    }
+
+    std::stringstream buffer;
+
+    buffer << input.rdbuf();
+
+    return parse(buffer.str());
+}
+
+这个设计让职责清晰：
+
+load()：处理文件输入
+parse()：处理文本格式
+五、多行 depfile 解析
+
+真实 GCC depfile 可能是：
+
+main.o: main.cpp \
+ config.h \
+ math.h
+
+如果直接通过：
+
+stream >> item;
+
+解析，会得到错误结果：
+
+main.cpp
+\
+config.h
+\
+math.h
+
+因为反斜杠会被当成普通 token。
+
+解决办法是在分词前进行规范化：
+
+反斜杠 + 换行
+    ↓
+替换为空格
+
+Linux 续行：
+
+\\ + \n
+
+Windows 续行：
+
+\\ + \r\n
+
+规范化后：
+
+main.o: main.cpp   config.h   math.h
+
+然后再通过 stringstream 分词。
+
+这一阶段暂未处理更复杂的转义，例如：
+
+my\ file.o: my\ file.cpp
+
+当前重点只支持最常见的 GCC 多行 depfile 格式。
+
+六、DepsLog 模块
+1. 为什么还需要 DepsLog
+
+Depfile 只表示一次解析结果。
+
+例如：
+
+main.o:
+    main.cpp
+    config.h
+
+但程序退出后，Depfile 对象会消失。
+
+ForgeBuild 第二次启动时仍然需要知道：
+
+main.o 依赖 config.h
+
+所以需要 DepsLog 保存长期依赖状态。
+
+内部结构：
+
+std::unordered_map<
+    std::string,
+    std::vector<std::string>
+> entries_;
+
+含义：
+
+output → dependency list
+
+例如：
+
+main.o
+  → main.cpp
+  → config.h
+  → math.h
+2. 主要接口
+void record(
+    const std::string& output,
+    const std::vector<std::string>& inputs
+);
+
+保存或覆盖一个输出的依赖记录。
+
+bool contains(
+    const std::string& output
+) const;
+
+判断是否有该输出的动态依赖记录。
+
+std::vector<std::string> inputs(
+    const std::string& output
+) const;
+
+返回依赖列表的副本。
+
+bool save(
+    const std::string& file_path
+) const;
+
+保存到磁盘。
+
+bool load(
+    const std::string& file_path
+);
+
+从磁盘恢复。
+
+七、DepsLog 持久化
+
+DepsLog 被保存到：
+
+.forge_deps
+
+当前使用的是简单文本格式。
+
+例如：
+
+main.o
+2
+main.cpp
+config.h
+
+含义是：
+
+第一行：输出路径
+第二行：依赖数量
+后续两行：依赖文件
+
+多个输出可以连续保存：
+
+main.o
+2
+main.cpp
+config.h
+app
+1
+main.o
+
+这种格式不是为了追求最高性能，而是为了：
+
+容易实现；
+容易调试；
+可以直接 cat 查看；
+方便当前阶段学习。
+1. load() 为什么先读取到临时 map
+
+正确流程：
+
+读取文件
+    ↓
+写入 loaded_entries
+    ↓
+完整解析成功
+    ↓
+替换 entries_
+
+而不是一边解析一边直接修改 entries_。
+
+因为文件可能损坏：
+
+main.o
+3
+main.cpp
+config.h
+
+声明有三个依赖，但实际只有两个。
+
+如果直接修改 entries_，解析失败时对象内部会留下半成品。
+
+使用临时容器可以保证：
+
+要么完整加载成功，要么保持旧状态不变。
+
+这是一种基本的事务式更新思想。
+
+八、DepsLog 并发安全
+
+Day9 已经实现了多线程 Scheduler。
+
+多个 Worker 可能同时完成编译：
+
+Worker 1 → compile a.cpp
+Worker 2 → compile b.cpp
+Worker 3 → compile main.cpp
+
+每个 Worker 完成后都会调用：
+
+deps_log_->record(...)
+
+如果多个线程同时修改同一个 unordered_map，会发生数据竞争，属于未定义行为。
+
+因此给 DepsLog 增加：
+
+mutable std::mutex mutex_;
+
+以下操作全部加锁：
+
+record()
+contains()
+inputs()
+1. 为什么读取也要加锁
+
+即使 contains() 只是读取：
+
+entries_.find(output)
+
+另一个线程可能正在插入新记录。
+
+插入可能：
+
+修改桶结构；
+触发 rehash；
+改变节点连接关系。
+
+因此无同步的并发读写不安全。
+
+2. 为什么 inputs() 返回副本
+
+原接口是：
+
+const std::vector<std::string>& inputs(...) const;
+
+加锁后即使这样写：
+
+std::lock_guard lock(mutex_);
+
+return entries_.at(output);
+
+函数返回时锁已经释放。
+
+调用者继续使用内部引用时，其他线程可能修改容器。
+
+因此改成：
+
+std::vector<std::string> inputs(...) const;
+
+流程：
+
+加锁
+    ↓
+复制依赖列表
+    ↓
+解锁
+    ↓
+返回副本
+
+这样调用者不再依赖容器内部对象的生命周期。
+
+3. save() 为什么使用快照
+
+不能一直持锁写磁盘：
+
+锁住
+    ↓
+缓慢磁盘写入
+    ↓
+其他 Worker 长时间阻塞
+
+正确方式：
+
+锁住
+    ↓
+复制 entries_ 到 snapshot
+    ↓
+解锁
+    ↓
+写 snapshot 到磁盘
+
+这既保证一致性，也减少锁持有时间。
+
+九、动态依赖接入 Builder
+
+项目中职责已经明确：
+
+Builder
+  ├─ 刷新文件状态
+  ├─ 判断哪些 Edge 直接过期
+  ├─ 向下游传播
+  └─ 生成 BuildPlan
+
+BuildPlanner
+  ├─ 拓扑排序
+  └─ 环检测
+
+因此动态依赖检查应该接入：
+
+Builder::collect_edges_to_build()
+
+而不是放进 BuildPlanner。
+
+1. 原有脏检查
+
+原来 Builder 只检查：
+
+const bool file_state_requires_build =
+    edge->needs_build();
+
+const bool command_requires_build =
+    command_changed(edge);
+
+其中 Edge::needs_build() 检查：
+
+输出不存在；
+显式输入比输出新。
+
+command_changed() 检查：
+
+当前命令 hash 与 BuildLog 中记录不一致。
+2. 增加动态依赖判断
+
+增加：
+
+const bool dependency_requires_build =
+    dynamic_dependency_changed(edge);
+
+最终条件：
+
+需要构建 =
+    文件状态要求构建
+    OR
+    命令变化
+    OR
+    动态依赖变化
+
+逻辑：
+
+if (!file_state_requires_build
+    && !command_requires_build
+    && !dependency_requires_build)
+{
+    continue;
+}
+3. dynamic_dependency_changed() 检查什么
+
+对 Edge 的每个输出，例如：
+
+main.o
+
+先查询：
+
+deps_log_->contains("main.o")
+
+如果存在记录：
+
+main.o:
+    main.cpp
+    config.h
+
+逐个检查：
+
+依赖文件不存在
+if (!FileSystem::exists(dependency))
+{
+    return true;
+}
+
+例如 config.h 被删除。
+
+旧的 main.o 不能再被认为可靠。
+
+依赖比输出新
+if (FileSystem::timestamp(dependency)
+    > output->timestamp())
+{
+    return true;
+}
+
+例如：
+
+config.h：14:10
+main.o：14:00
+
+说明 main.o 是基于旧头文件生成的，必须重新编译。
+
+十、动态依赖向下游传播
+
+假设：
+
+config.h
+   ↓
+main.o
+   ↓
+app
+
+config.h 更新后：
+
+compile Edge 直接变脏
+
+Builder 原有传播机制会继续执行：
+
+compile Edge 进入 pending queue
+        ↓
+main.o 标记即将变化
+        ↓
+遍历 main.o 的 out_edges
+        ↓
+link Edge 加入构建计划
+
+因此最终最小受影响子图是：
+
+compile main.cpp
+link app
+
+这非常重要。
+
+不能只重建直接过期任务，还要重建所有依赖其输出的下游任务。
+
+十一、Rule 增加 depfile 元数据
+
+构建规则需要同时保存：
+
+command 模板
+depfile 模板
+
+例如：
+
+command = g++ -MMD -MF $out.d -c $in -o $out
+depfile = $out.d
+
+因此 Rule 增加：
+
+const std::string& depfile() const;
+
+void set_depfile(
+    std::string depfile
+);
+
+内部成员：
+
+std::string depfile_;
+
+空字符串表示：
+
+该规则不生成 depfile。
+
+例如链接规则通常没有 depfile：
+
+rule link
+ command = g++ $in -o $out
+十二、Edge 展开 depfile 路径
+
+Rule 保存的是模板：
+
+$out.d
+
+但真正执行时需要具体路径：
+
+main.o.d
+
+因此 Edge 增加：
+
+std::string depfile() const;
+
+它和 Edge::command() 使用相同的模板展开逻辑：
+
+$in → 所有输入路径
+$out → 所有输出路径
+
+例如：
+
+Rule depfile：
+$out.d
+
+Edge output：
+build/main.o
+
+展开结果：
+build/main.o.d
+
+当前实现主要面向单输出编译 Edge。
+
+多个输出时 $out.d 的含义可能不合理，这属于后续规则约束问题。
+
+十三、Executor 自动收集 depfile
+
+Executor 的职责扩展为：
+
+执行命令
+    ↓
+确认命令成功
+    ↓
+读取规则声明的 depfile
+    ↓
+解析依赖
+    ↓
+写入 DepsLog
+    ↓
+刷新输出状态
+    ↓
+记录 BuildLog
+
+Executor 增加了：
+
+DepsLog* deps_log_;
+
+以及构造函数：
+
+Executor(
+    BuildLog& build_log,
+    DepsLog& deps_log
+);
+1. 命令成功后读取 depfile
+
+流程：
+
+const std::string depfile_path =
+    edge->depfile();
+
+如果路径不为空：
+
+Depfile depfile;
+
+if (!depfile.load(depfile_path))
+{
+    return false;
+}
+
+然后：
+
+deps_log_->record(
+    depfile.output(),
+    depfile.inputs()
+);
+2. 为什么 depfile 缺失视为失败
+
+规则声明：
+
+depfile = $out.d
+
+就代表：
+
+这个编译任务成功后必须产生该文件。
+
+如果命令成功但 .d 文件不存在，说明：
+
+编译命令配置错误；
+-MF 路径不一致；
+规则和实际行为不匹配。
+
+如果忽略这个问题，下一次构建会缺失头文件依赖。
+
+因此应该把当前任务视为不完整并返回失败。
+
+十四、Parser 支持 depfile 字段
+
+Forgefile 现在可以写：
+
+rule compile
+ command = g++ -MMD -MF $out.d -c $in -o $out
+ depfile = $out.d
+
+Parser 增加分支：
+
+else if (starts_with(line, "depfile ="))
+
+然后：
+
+current_rule_->set_depfile(depfile);
+
+完整数据链：
+
+文本：
+depfile = $out.d
+
+    ↓
+
+Parser：
+提取 "$out.d"
+
+    ↓
+
+Rule：
+保存 depfile_
+
+    ↓
+
+Edge：
+展开为 main.o.d
+
+    ↓
+
+Executor：
+加载 main.o.d
+
+Parser 只负责文本到数据模型的转换。
+
+它不负责：
+
+展开变量；
+读取文件；
+判断依赖；
+执行命令。
+
+这是良好的职责分离。
+
+十五、CLI 主程序
+
+Day10 后期创建了真正的：
+
+src/main.cpp
+
+生成：
+
+forge
+
+运行方式：
+
+./build/debug/forge build.forge
+
+CLI 本身不实现构建算法，而是负责组织现有模块。
+
+正确顺序：
+
+1. 读取命令行参数
+2. Parser 解析 Forgefile
+3. 加载 BuildLog
+4. 加载 DepsLog
+5. Builder 生成 BuildPlan
+6. Executor 执行
+7. 构建成功后保存日志
+
+核心代码关系：
+
+Manifest manifest;
+Parser parser;
+
+parser.parse_file(
+    manifest_path,
+    manifest
+);
+
+然后：
+
+BuildLog build_log;
+DepsLog deps_log;
+
+build_log.load(".forge_log");
+deps_log.load(".forge_deps");
+
+再生成计划：
+
+Builder builder(
+    manifest.graph(),
+    build_log,
+    deps_log
+);
+
+BuildPlan plan =
+    builder.build();
+
+执行：
+
+Executor executor(
+    build_log,
+    deps_log
+);
+
+executor.execute(plan);
+
+最后保存：
+
+build_log.save(".forge_log");
+deps_log.save(".forge_deps");
+十六、为什么只有构建成功后才保存日志
+
+假设：
+
+compile 成功
+link 失败
+
+这次构建没有完整成功。
+
+如果仍然覆盖日志，下一次运行可能误认为：
+
+所有结果都已经是最新状态
+
+因此顺序必须是：
+
+全部执行成功
+    ↓
+保存日志
+
+构建失败时保留上一份可靠日志。
+
+当前实现中，空计划时直接：
+
+nothing to build
+
+无需重新保存，因为状态没有变化。
+
+十七、Day10 完成的真实验证
+
+Day10 不是只做到代码编译通过，而是完成了多组实际验证。
+
+1. Depfile 基础解析
+
+输入：
+
+main.o: main.cpp config.h math.h
+
+输出：
+
+output:
+main.o
+
+inputs:
+main.cpp
+config.h
+math.h
+2. 多行 depfile
+
+输入：
+
+main.o: main.cpp \
+ config.h \
+ math.h
+
+仍然正确解析为：
+
+main.cpp
+config.h
+math.h
+
+没有错误地把 \ 当成文件。
+
+3. DepsLog 持久化
+
+保存：
+
+main.o:
+    main.cpp
+    config.h
+    math.h
+
+app:
+    main.o
+
+创建新的 DepsLog 对象重新加载后，数据完整恢复。
+
+4. 动态依赖脏检查
+
+构造：
+
+main.cpp → main.o → app
+
+并在 DepsLog 中记录：
+
+main.o → main.cpp, config.h
+
+验证结果：
+
+所有文件最新：
+plan edge count = 0
+config.h 更新：
+plan edge count = 2
+compile + link
+config.h 删除：
+plan edge count = 2
+compile + link
+5. 真实 GCC depfile 闭环
+
+第一次构建：
+
+case 1: first build
+plan edge count: 2
+
+执行：
+
+g++ -MMD -MF main.o.d -c main.cpp -o main.o
+g++ main.o -o app
+
+第二次无修改：
+
+plan edge count: 0
+
+修改 config.h：
+
+plan edge count: 2
+compile + link
+6. Forgefile 解析验证
+
+配置：
+
+rule compile
+ command = g++ -MMD -MF $out.d -c $in -o $out
+ depfile = $out.d
+
+Parser 得到：
+
+command:
+g++ -MMD -MF $out.d -c $in -o $out
+
+depfile:
+$out.d
+
+说明配置字段成功进入 Rule。
+
+7. 真正 CLI 首次构建
+
+运行：
+
+./build/debug/forge build.forge
+
+输出：
+
+planned edge count: 1
+===== Execute Build =====
+g++ -MMD -MF main.o.d -c main.cpp -o main.o
+build succeeded
+
+生成：
+
+main.o
+main.o.d
+.forge_log
+.forge_deps
+8. 第二次无修改跳过
+
+再次运行：
+
+planned edge count: 0
+nothing to build
+9. 源文件更新时间触发重建
+
+执行：
+
+touch main.cpp
+
+再次运行：
+
+planned edge count: 1
+g++ ...
+build succeeded
+10. 头文件动态依赖最终验证
+
+main.cpp：
+
+#include "config.h"
+
+GCC 生成：
+
+main.o: main.cpp config.h
+
+.forge_deps：
+
+main.o
+2
+main.cpp
+config.h
+
+无修改时：
+
+planned edge count: 0
+nothing to build
+
+只执行：
+
+touch config.h
+
+再次运行：
+
+planned edge count: 1
+g++ -MMD -MF main.o.d -c main.cpp -o main.o
+build succeeded
+
+这证明动态依赖链完整生效。
+
+十八、Day10 最终模块关系
+                       Forgefile
+                           |
+                           v
+                        Parser
+                           |
+                           v
+                          Rule
+                 command / depfile模板
+                           |
+                           v
+                          Edge
+                 展开 $in / $out
+                           |
+                           v
+                        Builder
+       ┌───────────────────┼───────────────────┐
+       v                   v                   v
+Edge::needs_build       BuildLog            DepsLog
+显式输入和输出时间      命令hash             动态依赖
+       └───────────────────┼───────────────────┘
+                           v
+                    直接过期 Edge
+                           |
+                           v
+                    向下游传播
+                           |
+                           v
+                    BuildPlanner
+                    拓扑排序/环检测
+                           |
+                           v
+                      BuildPlan
+                           |
+                           v
+                       Executor
+                           |
+             ┌─────────────┴─────────────┐
+             v                           v
+       执行编译命令                  读取 depfile
+             |                           |
+             v                           v
+        更新 BuildLog               更新 DepsLog
+十九、Day10 中涉及的重要工程思想
+1. 单一职责
+Parser：解析配置
+Rule：保存规则元数据
+Edge：绑定规则和具体输入输出
+Depfile：解析依赖文件
+DepsLog：保存动态依赖
+Builder：判断哪些任务要构建
+BuildPlanner：拓扑排序
+Executor：执行命令并收集结果
+
+每个模块只处理自己的问题。
+
+2. 配置驱动
+
+编译行为不是写死在 Executor 中。
+
+Executor 不假设：
+
+depfile = output + ".d"
+
+而是由 Rule 显式声明：
+
+depfile = $out.d
+
+这样可以支持不同编译器、不同目录布局和不同 depfile 路径。
+
+3. 状态持久化
+
+增量构建不能只依赖当前进程内存。
+
+需要保存：
+
+BuildLog：命令状态
+DepsLog：依赖状态
+
+程序重启后重新加载，才能继续正确增量构建。
+
+4. 失败原子性
+
+日志加载先写临时容器。
+
+全部成功后再替换正式状态。
+
+构建只有整体成功后才保存新日志。
+
+这能避免半成品状态污染下一次构建。
+
+5. 并发安全
+
+Scheduler 会让多个任务并行完成。
+
+共享的：
+
+BuildLog
+DepsLog
+
+必须使用互斥锁保护。
+
+返回内部引用会让锁失去意义，因此 DepsLog 返回依赖副本。
+
+6. 脏状态传播
+
+直接过期任务只是起点。
+
+上游输出将变化时，所有下游任务也必须进入计划。
+
+这使 Builder 生成的是：
+
+最小受影响子图，而不是只包含直接变化的任务。
+
+二十、当前已知限制
+
+Day10 完成了可用的核心版本，但仍有一些限制。
+
+1. Depfile 转义处理不完整
+
+目前支持：
+
+反斜杠续行
+
+暂未完整支持：
+
+文件名中的空格
+转义井号
+转义冒号
+多个目标
+2. DepsLog 文件格式简单
+
+当前格式：
+
+没有版本号；
+没有校验和；
+没有转义机制；
+文件路径包含特殊换行时无法处理；
+没有原子临时文件替换。
+
+后续可靠性阶段可以优化。
+
+3. CLI 固定日志路径
+
+当前使用：
+
+.forge_log
+.forge_deps
+
+都保存在当前工作目录。
+
+还没有：
+
+自定义构建目录；
+多项目隔离；
+日志版本兼容；
+--clean 等命令。
+4. CLI 当前串行执行
+
+虽然 Scheduler 已经支持并行，但当前主程序仍使用：
+
+executor.execute(plan);
+
+还没有支持：
+
+forge -j 8 build.forge
+
+这是 Day11 的重点。
+
+5. Parser 错误信息较弱
+
+目前大部分错误只返回：
+
+false
+
+还没有：
+
+行号；
+字段名；
+具体错误原因；
+严格缩进校验；
+未知字段报错。
+6. 多输出 depfile 模板限制
+
+当前：
+
+$out.d
+
+默认适合单输出编译任务。
+
+如果一个 Edge 有多个输出，模板展开结果可能不合理。
+
+后续需要规则约束或专门变量。
+
+二十一、面试表达
+精简版
+
+我实现了 GCC/Clang depfile 动态依赖追踪。编译成功后，Executor 自动解析 .d 文件并将目标文件到源文件、头文件的依赖持久化到 DepsLog。后续构建由 Builder 结合文件时间戳、输出存在性、命令哈希和动态依赖进行脏检查，并将变化沿 DAG 向下游传播，生成最小受影响构建子图。
+
+详细版
+
+ForgeBuild 的显式构建图只能从配置中得知源文件依赖，无法准确追踪宏、条件编译和 include 搜索路径产生的头文件依赖。因此我采用 GCC/Clang 的 -MMD -MF 机制生成 depfile，并实现了支持多行续行格式的 Depfile 解析器。编译任务成功后，Executor 根据 Rule 中声明的 depfile 模板读取 .d 文件，将 output 到实际 inputs 的关系写入线程安全的 DepsLog，并持久化到磁盘。下一次构建时，Builder 同时检查显式输入、动态依赖、输出时间戳和 BuildLog 中的命令哈希，并把直接变脏任务沿 DAG 向下游传播，最后由 BuildPlanner 进行拓扑排序，得到最小受影响构建计划。
+
+二十二、Day10 最终验收标准
+
+Day10 可以视为完成，是因为已经满足：
+
+✅ 能生成真实 GCC depfile
+✅ 能解析单行 depfile
+✅ 能解析多行续行 depfile
+✅ 能保存 output → dependency list
+✅ 能持久化和恢复 DepsLog
+✅ DepsLog 支持并发访问
+✅ Builder 使用动态依赖进行脏检查
+✅ 动态变化可以向下游传播
+✅ Rule 支持 depfile 模板
+✅ Edge 支持 $in / $out 展开
+✅ Executor 自动读取 depfile
+✅ Parser 支持 depfile 配置字段
+✅ CLI 能从 Forgefile 驱动构建
+✅ 第二次无修改完全跳过
+✅ 修改源文件触发重建
+✅ 修改头文件触发重建
+✅ 命令变化仍由 BuildLog 处理
+
+Day10 最终结果可以概括为：
+
+ForgeBuild 已经从“基于显式文件时间戳的构建执行器”，升级为“支持编译器动态依赖、跨进程状态恢复和最小增量重建的小型构建系统”。

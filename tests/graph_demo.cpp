@@ -2,6 +2,7 @@
 #include "forge/edge.hpp"
 #include "forge/node.hpp"
 #include "forge/rule.hpp"
+#include "forge/manifest.hpp"
 
 #include <cassert>
 #include <iostream>
@@ -9,22 +10,39 @@
 
 int main()
 {
-    // Rule 必须比 Graph 中引用它们的 Edge 活得更久。
-    forge::Rule compile_rule(
-        "compile",
-        "g++ -c $in -o $out"
-    );
+    forge::Manifest manifest;
 
-    forge::Rule link_rule(
-        "link",
-        "g++ $in -o $out"
-    );
+    auto* compile_rule =
+        manifest.add_rule(
+            "compile",
+            "g++ -c $in -o $out"
+        );
 
-    forge::BuildGraph graph;
+    auto* link_rule =
+        manifest.add_rule(
+            "link",
+            "g++ $in -o $out"
+        );
+
+    forge::BuildGraph& graph =
+        manifest.graph();
 
     // 创建5个唯一的文件节点。
     auto* main_cpp =
         graph.get_or_create_node("main.cpp");
+
+    std::cout
+        << "dirty before: "
+        << main_cpp->dirty()
+        << "\n";
+
+
+    main_cpp->mark_dirty();
+
+    std::cout
+        << "dirty after: "
+        << main_cpp->dirty()
+        << "\n";
 
     auto* math_cpp =
         graph.get_or_create_node("math.cpp");
@@ -40,21 +58,27 @@ int main()
 
     // main.cpp --compile--> main.o
     auto* compile_main =
-        graph.create_edge(&compile_rule);
+        graph.create_edge(compile_rule);
 
     graph.add_input(compile_main, main_cpp);
     graph.add_output(compile_main, main_o);
 
+    std::cout
+        << "compile needs build: "
+        << compile_main->needs_build()
+        << "\n";
+
+
     // math.cpp --compile--> math.o
     auto* compile_math =
-        graph.create_edge(&compile_rule);
+        graph.create_edge(compile_rule);
 
     graph.add_input(compile_math, math_cpp);
     graph.add_output(compile_math, math_o);
 
     // main.o + math.o --link--> app
     auto* link_app =
-        graph.create_edge(&link_rule);
+        graph.create_edge(link_rule);
 
     graph.add_input(link_app, main_o);
     graph.add_input(link_app, math_o);
@@ -107,6 +131,31 @@ int main()
 
     assert(app->in_edge() == link_app);
     assert(app->out_edges().empty());
+
+    assert(
+        manifest.find_rule("compile")
+        == compile_rule
+    );
+
+    assert(
+        manifest.find_rule("link")
+        == link_rule
+    );
+
+    assert(
+        manifest.find_rule("missing")
+        == nullptr
+    );
+
+    assert(
+        compile_main->rule()
+        == compile_rule
+    );
+
+    assert(
+        compile_math->rule()
+        == compile_rule
+    );
 
     std::cout << "Build graph:\n";
     std::cout << "  main.cpp --compile--> main.o\n";

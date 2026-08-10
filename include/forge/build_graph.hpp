@@ -14,7 +14,7 @@ class Rule;
 class BuildGraph
 {
 public:
-    BuildGraph() = default;
+    BuildGraph();
 
     ~BuildGraph();
 
@@ -28,6 +28,16 @@ public:
     void add_input(Edge* edge, Node* node);
 
     void add_output(Edge* edge, Node* node);
+
+    void dump() const;
+
+    const std::vector<std::unique_ptr<Edge>>& edges() const;
+
+    const std::unordered_map<
+        std::string,
+        std::unique_ptr<Node>
+    >& nodes() const;
+
 
 private:
     std::unordered_map<

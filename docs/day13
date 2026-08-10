@@ -1,0 +1,3297 @@
+# ForgeBuild Day13 笔记
+
+# Day13-1：CTest 自动化回归测试
+
+---
+
+## 1. 为什么需要自动化回归测试
+
+在前面的开发阶段，我们已经写了很多 Demo，例如：
+
+```text
+scheduler_guard_demo
+scheduler_multi_output_demo
+scheduler_failure_demo
+hash_demo
+local_cache_demo
+```
+
+如果只是手动运行：
+
+```bash
+./build/debug/hash_demo
+./build/debug/local_cache_demo
+```
+
+这种测试方式的问题是：
+
+```text
+每次修改代码
+↓
+需要开发者自己记得重新跑所有 Demo
+↓
+容易遗漏
+↓
+旧功能可能被新修改破坏
+```
+
+因此需要把关键测试统一注册到：
+
+```text
+CTest
+```
+
+CTest 是 CMake 自带的测试运行工具。
+
+它解决的问题不是：
+
+```text
+“怎么写测试代码”
+```
+
+而是：
+
+```text
+“如何统一注册、运行和统计测试”
+```
+
+---
+
+## 2. CTest 与普通 Demo 的区别
+
+普通 Demo：
+
+```text
+hash_demo
+local_cache_demo
+```
+
+本质还是普通 executable。
+
+例如：
+
+```bash
+./build/debug/hash_demo
+```
+
+CTest 做的是在这些 executable 外面再增加一层统一管理：
+
+```text
+CTest
+ ├── scheduler_guard_demo
+ ├── scheduler_multi_output_demo
+ ├── scheduler_failure_demo
+ ├── hash_demo
+ └── local_cache_demo
+```
+
+之后只需要：
+
+```bash
+ctest
+```
+
+即可统一运行。
+
+---
+
+# 3. 当前注册的 5 个测试
+
+Day13-1 最终注册了：
+
+```text
+scheduler_guard
+scheduler_multi_output
+scheduler_failure
+hash
+local_cache
+```
+
+实际执行结果：
+
+```text
+Test #1: scheduler_guard
+Test #2: scheduler_multi_output
+Test #3: scheduler_failure
+Test #4: hash
+Test #5: local_cache
+```
+
+最终：
+
+```text
+100% tests passed
+0 tests failed out of 5
+```
+
+总耗时：
+
+```text
+0.03 sec
+```
+
+---
+
+# 4. Scheduler 测试覆盖什么
+
+## scheduler_guard
+
+主要用于验证 Scheduler 的边界和保护逻辑。
+
+例如：
+
+```text
+非法并行度
+不合理参数
+调度保护条件
+```
+
+目标：
+
+```text
+异常参数
+→ 不应该导致 Scheduler 挂死
+```
+
+---
+
+## scheduler_multi_output
+
+验证多输出 Edge 相关的调度行为。
+
+构建系统中一个 Edge 不一定只有：
+
+```text
+一个 output
+```
+
+可能：
+
+```text
+Edge
+├── output A
+└── output B
+```
+
+Scheduler 必须避免因为多个 output 对应同一个生成任务，而：
+
+```text
+重复执行同一个 Edge
+```
+
+因此这类测试主要验证：
+
+```text
+依赖传播
+Edge 去重
+任务只执行一次
+```
+
+---
+
+## scheduler_failure
+
+验证：
+
+```text
+某个构建任务失败
+```
+
+之后 Scheduler 如何处理。
+
+期望行为：
+
+```text
+任务失败
+↓
+下游依赖不应该继续错误执行
+↓
+失败状态传播
+↓
+整个 build 返回失败
+```
+
+这属于构建系统中很重要的：
+
+```text
+Failure Propagation
+```
+
+---
+
+# 5. Hash 测试覆盖什么
+
+`hash_demo` 不只是简单测：
+
+```text
+能不能算 Hash
+```
+
+实际上覆盖了 Day12 的 CacheKey 基础。
+
+包括：
+
+```text
+相同输入
+→ 相同 Hash
+
+不同 command
+→ Hash 变化
+
+一次性 Hash
+==
+incremental Hash
+
+文件内容 Hash
+→ 正确
+
+文件不存在
+→ update_file 返回 false
+
+dependency 内容改变
+→ Cache Key 改变
+```
+
+其中最重要的一项是：
+
+```text
+header 内容变化
+→ dependency hash 变化
+→ Cache Key 变化
+```
+
+这保证：
+
+```text
+修改头文件
+```
+
+不会错误恢复旧 `.o`。
+
+---
+
+# 6. LocalCache 测试覆盖什么
+
+`local_cache_demo` 最终测试了：
+
+```text
+store
+restore
+atomic write
+metadata
+corruption detection
+corrupted cache cleanup
+```
+
+完整链路：
+
+```text
+创建 fake output
+↓
+store(key)
+↓
+cache object + metadata
+↓
+删除 output
+↓
+restore()
+↓
+恢复成功
+↓
+验证内容完全一致
+```
+
+之后人为破坏：
+
+```text
+cache object
+```
+
+再：
+
+```text
+restore()
+```
+
+应该：
+
+```text
+检测 size/hash 不一致
+↓
+restore false
+↓
+删除损坏 cache
+```
+
+验证了核心原则：
+
+> Cache 出错只能导致性能下降，不能导致错误构建结果。
+
+---
+
+# 7. 为什么给测试设置 TIMEOUT
+
+CTest 中：
+
+```text
+TIMEOUT 5
+```
+
+很重要。
+
+尤其 Scheduler 是：
+
+```text
+多线程程序
+```
+
+如果出现：
+
+```text
+deadlock
+condition_variable 错误
+worker 无法退出
+```
+
+测试可能永久卡死。
+
+如果没有 TIMEOUT：
+
+```text
+CI
+↓
+永远等待
+```
+
+设置：
+
+```text
+TIMEOUT 5
+```
+
+后：
+
+```text
+超过 5 秒
+→ 测试失败
+```
+
+这能防止并发测试无限挂起。
+
+---
+
+# 8. CTest 在工程中的角色
+
+整体关系：
+
+```text
+tests/*.cpp
+     ↓
+生成 test executable
+     ↓
+CMake add_test()
+     ↓
+CTest
+     ↓
+统一运行
+     ↓
+PASS / FAIL
+```
+
+CTest 本身不是单元测试框架。
+
+例如：
+
+```text
+GoogleTest
+Catch2
+doctest
+```
+
+更偏：
+
+```text
+测试代码怎么写
+```
+
+CTest 更偏：
+
+```text
+测试怎么组织和运行
+```
+
+ForgeBuild 当前直接用：
+
+```text
+assert
++
+CTest
+```
+
+完成第一版自动回归。
+
+---
+
+# 9. Day13-1 面试总结
+
+如果面试官问：
+
+> 你项目怎么保证后续修改不破坏已有功能？
+
+可以回答：
+
+> 我把 Scheduler 的非法配置、多输出任务、失败传播，以及 Hash、CacheKey 和 LocalCache 的原子写入、损坏检测等关键行为注册到 CTest 自动回归，同时给并发测试设置 timeout，避免死锁导致测试无限挂起。
+
+---
+
+# 10. Day13-1 最终成果
+
+```text
+✓ 5 个测试注册到 CTest
+✓ Scheduler 边界测试
+✓ Scheduler 多输出测试
+✓ Scheduler Failure Propagation
+✓ Hash / CacheKey 测试
+✓ LocalCache 测试
+✓ 并发测试 Timeout
+✓ 5 / 5 tests passed
+```
+
+---
+
+---
+
+# Day13-2：Benchmark 与性能验证
+
+---
+
+# 1. 为什么不能只说“我的项目支持并行”
+
+实现：
+
+```text
+-j N
+```
+
+并不等于：
+
+```text
+并行真的有效
+```
+
+必须用数据回答：
+
+```text
+-j1 多久？
+-j2 多久？
+-j4 多久？
+
+加速多少？
+效率多少？
+```
+
+同理，做了 Cache 后也不能只说：
+
+```text
+“有缓存，所以更快”
+```
+
+必须测试：
+
+```text
+Cold Build
+vs
+Cache Restore
+```
+
+所以 Day13-2 的目标是：
+
+> 为 ForgeBuild 建立可量化、可复现的性能验证。
+
+---
+
+# 2. 最开始的小工程 Benchmark
+
+原始测试工程：
+
+```text
+a.cpp
+b.cpp
+main.cpp
+```
+
+总共：
+
+```text
+3 个 compile
++
+1 个 link
+```
+
+测试结果：
+
+```text
+Cold Build:
+0.45 s
+
+Cache Restore:
+0.06 s
+```
+
+单次看：
+
+```text
+约 7.5×
+```
+
+后来重复 5 次：
+
+Cold：
+
+```text
+0.35
+0.35
+0.34
+0.36
+0.37
+```
+
+平均：
+
+```text
+0.354 s
+```
+
+Cache：
+
+```text
+0.06
+0.06
+0.06
+0.06
+0.06
+```
+
+平均：
+
+```text
+0.060 s
+```
+
+加速约：
+
+```text
+5.9×
+```
+
+耗时下降约：
+
+```text
+83.1%
+```
+
+---
+
+# 3. 为什么这组数据不够强
+
+虽然数据稳定，但 workload 太小：
+
+```text
+只有 3 个 cpp
+总耗时只有 0.3 秒左右
+```
+
+短任务更容易被这些因素影响：
+
+```text
+VM 调度
+进程启动
+磁盘缓存
+CPU 波动
+```
+
+因此问题不是：
+
+```text
+“5 次样本太少”
+```
+
+真正的问题是：
+
+```text
+workload 太小
+```
+
+所以没有简单把测试次数提高到：
+
+```text
+50 次
+100 次
+```
+
+而是重新构造更合理的 Benchmark。
+
+这是一个非常重要的 Benchmark 思想：
+
+> 代表性的 workload 比单纯增加样本数量更重要。
+
+---
+
+# 4. 专用 32 源文件 Benchmark
+
+建立：
+
+```text
+benchmark/
+├── generate_benchmark.sh
+├── include/
+│   └── common.hpp
+├── src/
+│   ├── file_00.cpp
+│   ├── file_01.cpp
+│   ├── ...
+│   ├── file_30.cpp
+│   └── main.cpp
+├── out/
+└── build.forge
+```
+
+总任务：
+
+```text
+32 个 compile Edge
++
+1 个 link Edge
+=
+33 Edge
+```
+
+---
+
+# 5. Benchmark 为什么使用 32 个 cpp
+
+这个规模有几个好处。
+
+第一：
+
+```text
+足够多的独立任务
+```
+
+Scheduler 可以持续并行。
+
+第二：
+
+```text
+构建耗时达到秒级
+```
+
+比 0.3 秒的小工程更稳定。
+
+第三：
+
+所有：
+
+```text
+file_00.cpp
+...
+file_30.cpp
+```
+
+都包含：
+
+```text
+common.hpp
+```
+
+可以测试：
+
+```text
+公共 Header 高扇出依赖
+```
+
+第四：
+
+`main.cpp` 不依赖：
+
+```text
+common.hpp
+```
+
+这样修改公共头文件时，可以验证：
+
+```text
+只影响真正依赖它的 TU
+```
+
+---
+
+# 6. Translation Unit
+
+一个 `.cpp` 经过预处理后：
+
+```text
+.cpp
++
+所有 #include 内容
+```
+
+形成：
+
+```text
+Translation Unit
+```
+
+然后：
+
+```text
+一个 Translation Unit
+→ 一个 .o
+```
+
+所以 32 个 `.cpp` 可以近似理解成：
+
+```text
+32 个独立编译单元
+```
+
+---
+
+# 7. 第一次 Benchmark 验证
+
+运行：
+
+```text
+-j4
+```
+
+ForgeBuild 输出：
+
+```text
+planned edge count: 33
+```
+
+说明：
+
+```text
+32 compile
++
+1 link
+```
+
+全部被正确规划。
+
+最终：
+
+```text
+build succeeded
+```
+
+Benchmark 程序输出：
+
+```text
+4050231475312910501
+```
+
+后面的每一次测试都用这个输出验证：
+
+```text
+性能优化没有破坏正确性
+```
+
+---
+
+# 8. 并行性能测试
+
+测试环境：
+
+```text
+4 vCPU Ubuntu VM
+```
+
+测试：
+
+```text
+-j1
+-j2
+-j4
+```
+
+每组：
+
+```text
+5 次 Cold Build
+```
+
+---
+
+## -j1
+
+结果：
+
+```text
+3.30
+3.24
+3.14
+3.23
+3.12
+```
+
+平均：
+
+```text
+3.206 s
+```
+
+作为串行基线：
+
+```text
+Speedup = 1.0×
+```
+
+---
+
+## -j2
+
+结果：
+
+```text
+1.67
+1.63
+1.63
+1.65
+1.66
+```
+
+平均：
+
+```text
+1.648 s
+```
+
+加速：
+
+```text
+3.206 / 1.648
+≈ 1.95×
+```
+
+并行效率：
+
+```text
+1.95 / 2
+≈ 97.3%
+```
+
+这说明：
+
+```text
+1 Worker → 2 Worker
+```
+
+扩展性非常好。
+
+---
+
+## -j4
+
+结果：
+
+```text
+0.97
+0.99
+1.00
+1.09
+1.26
+```
+
+平均：
+
+```text
+1.062 s
+```
+
+加速：
+
+```text
+3.206 / 1.062
+≈ 3.02×
+```
+
+并行效率：
+
+```text
+3.02 / 4
+≈ 75.5%
+```
+
+相对 `-j1`：
+
+```text
+耗时下降约 66.9%
+```
+
+---
+
+# 9. 为什么 -j4 不是 4×
+
+理论理想：
+
+```text
+-j4
+→ 4×
+```
+
+实际只有：
+
+```text
+3.02×
+```
+
+原因包括：
+
+```text
+进程创建开销
+线程调度
+VM 调度
+磁盘 I/O
+Scheduler 同步开销
+最终 link 是串行任务
+CPU 资源竞争
+```
+
+特别是：
+
+```text
+link
+```
+
+无法并行化。
+
+构建 DAG：
+
+```text
+compile 00 ─┐
+compile 01 ─┤
+compile 02 ─┤
+   ...       ├→ link
+compile 31 ─┘
+```
+
+前面可并行。
+
+最后：
+
+```text
+link
+```
+
+仍然只有一个任务。
+
+---
+
+# 10. Amdahl's Law
+
+Day13 Benchmark 自然对应一个经典思想：
+
+> 一个系统整体加速能力受到不可并行部分限制。
+
+即使：
+
+```text
+compile
+```
+
+无限快，
+
+最终：
+
+```text
+link
+Scheduler overhead
+process overhead
+```
+
+仍然存在。
+
+所以：
+
+```text
+Worker 越多
+≠
+性能无限线性提升
+```
+
+---
+
+# 11. 并行效率
+
+定义：
+
+```text
+Efficiency(N)
+=
+Speedup(N) / N
+```
+
+ForgeBuild：
+
+```text
+-j2:
+1.95 / 2
+≈ 97.3%
+
+-j4:
+3.02 / 4
+≈ 75.5%
+```
+
+说明：
+
+```text
+2 Worker 扩展非常接近理想
+4 Worker 仍有明显收益
+但开始受到系统瓶颈影响
+```
+
+---
+
+# 12. Content Cache Benchmark
+
+接着在 32 文件 workload 上测 Cache。
+
+条件：
+
+```text
+保留：
+.forge_cache
+.forge_deps
+
+删除：
+benchmark/out
+```
+
+这样：
+
+```text
+所有输出都不存在
+↓
+Builder 必须规划 compile Edge
+↓
+Executor 尝试 Cache Restore
+```
+
+这和：
+
+```text
+“什么都没改，直接增量构建”
+```
+
+不是一回事。
+
+---
+
+# 13. 10 次 Cache Restore
+
+结果：
+
+```text
+0.12
+0.10
+0.08
+0.07
+0.08
+0.08
+0.08
+0.08
+0.08
+0.09
+```
+
+平均：
+
+```text
+0.086 s
+```
+
+中位数：
+
+```text
+0.080 s
+```
+
+与：
+
+```text
+-j4 Cold Build
+=
+1.062 s
+```
+
+比较：
+
+```text
+Speedup
+=
+1.062 / 0.086
+≈ 12.35×
+```
+
+耗时下降：
+
+```text
+约 91.9%
+```
+
+---
+
+# 14. 为什么 Cache 比并行加速更明显
+
+并行构建：
+
+```text
+仍然需要执行 g++
+```
+
+只是：
+
+```text
+多个 g++ 同时运行
+```
+
+Cache Restore：
+
+```text
+直接跳过 g++
+```
+
+所以优化层次不同。
+
+---
+
+# 15. Incremental Build 和 Cache 的区别
+
+这是非常重要的面试问题。
+
+## Incremental Build
+
+例如：
+
+```text
+所有输入没变
+输出也存在
+```
+
+Builder：
+
+```text
+Edge clean
+↓
+不加入 BuildPlan
+↓
+根本不执行
+```
+
+特点：
+
+> 避免执行任务。
+
+---
+
+## Content Cache
+
+例如：
+
+```text
+.o 被删了
+```
+
+Builder：
+
+```text
+output 不存在
+↓
+Edge dirty
+↓
+需要执行
+```
+
+但是：
+
+```text
+以前编译过同样输入
+```
+
+Executor：
+
+```text
+Cache Key
+↓
+cache hit
+↓
+restore .o
+↓
+跳过 compiler
+```
+
+特点：
+
+> 任务需要执行，但复用历史结果。
+
+---
+
+# 16. 单文件增量测试
+
+修改：
+
+```text
+benchmark/src/file_00.cpp
+```
+
+只增加一个注释。
+
+结果：
+
+```text
+planned edge count: 2
+```
+
+执行：
+
+```text
+file_00.cpp
+↓
+file_00.o
+
+然后
+↓
+link app
+```
+
+其余：
+
+```text
+31 个 compile Edge
+```
+
+全部没有执行。
+
+同时：
+
+```text
+file_00.o
+→ cache miss
+```
+
+因为文件内容改变：
+
+```text
+Cache Key 改变
+```
+
+最终程序仍输出：
+
+```text
+4050231475312910501
+```
+
+---
+
+# 17. 最小受影响子图
+
+这个测试证明：
+
+```text
+整个 Build Graph
+≠
+整个都要执行
+```
+
+BuildPlanner 根据 Dirty 状态得到：
+
+```text
+Affected Subgraph
+```
+
+只把真正需要重建的 Edge 放入：
+
+```text
+BuildPlan
+```
+
+例如：
+
+```text
+33 Edge
+↓
+修改 file_00.cpp
+↓
+实际执行 2 Edge
+```
+
+这就是：
+
+```text
+最小受影响子图
+```
+
+---
+
+# 18. 公共 Header 高扇出测试
+
+所有：
+
+```text
+file_00.cpp ~ file_30.cpp
+```
+
+包含：
+
+```text
+common.hpp
+```
+
+但是：
+
+```text
+main.cpp
+```
+
+不包含它。
+
+修改：
+
+```text
+common.hpp
+```
+
+后：
+
+```text
+planned edge count: 32
+```
+
+其中：
+
+```text
+31 compile
++
+1 link
+```
+
+而：
+
+```text
+main.cpp
+```
+
+没有重新编译。
+
+---
+
+# 19. High Fan-Out Dependency
+
+一个节点被大量下游依赖：
+
+```text
+                 ┌→ file_00.cpp
+                 ├→ file_01.cpp
+common.hpp ──────┼→ ...
+                 └→ file_30.cpp
+```
+
+叫：
+
+```text
+High Fan-Out Dependency
+```
+
+修改这种公共 Header：
+
+```text
+会导致大量 Translation Unit 失效
+```
+
+这是大型 C++ 工程中非常常见的性能问题。
+
+---
+
+# 20. Day13-2 最终 Benchmark 数据
+
+测试环境：
+
+```text
+Ubuntu VM
+4 vCPU
+32 C++ Compile Units
+1 Link Edge
+```
+
+最终数据：
+
+```text
+-j1 Cold:
+3.206 s
+
+-j2 Cold:
+1.648 s
+1.95× speedup
+97.3% efficiency
+
+-j4 Cold:
+1.062 s
+3.02× speedup
+75.5% efficiency
+
+Cache Restore:
+0.086 s
+12.35× vs -j4 cold
+约 91.9% 时间下降
+```
+
+增量：
+
+```text
+修改一个 cpp
+→ 2 Edge
+
+修改公共 Header
+→ 32 Edge
+```
+
+---
+
+# 21. Day13-2 面试回答
+
+可以说：
+
+> 我构造了一个包含 32 个 C++ 编译单元和 1 个链接任务的 Benchmark。在 4-vCPU Ubuntu VM 上，ForgeBuild 从 `-j1` 的约 3.21 秒降低到 `-j4` 的约 1.06 秒，获得约 3.02 倍加速；删除构建产物但保留内容缓存后，平均恢复时间约 0.086 秒，相比 `-j4` Cold Build 约 12.35 倍加速。同时通过单源文件修改和公共 Header 高扇出场景验证最小受影响子图和动态依赖传播。
+
+---
+
+---
+
+# Day13-3：Sanitizer 与可靠性验证
+
+---
+
+# 1. 为什么编译成功不等于程序正确
+
+例如：
+
+```cpp
+int* p = new int[3];
+
+std::cout << p[3];
+```
+
+语法完全合法。
+
+所以：
+
+```text
+compiler
+→ 可以编译成功
+```
+
+但实际上：
+
+```text
+合法索引只有 0、1、2
+```
+
+所以：
+
+```text
+p[3]
+```
+
+属于非法内存访问。
+
+这说明：
+
+```text
+Compile Success
+≠
+Runtime Correctness
+```
+
+---
+
+# 2. Sanitizer 是什么
+
+Sanitizer 可以理解为：
+
+> 编译器在程序中插入额外运行时检查代码。
+
+普通程序：
+
+```text
+C++ Source
+↓
+Compiler
+↓
+Machine Code
+```
+
+Sanitizer 程序：
+
+```text
+C++ Source
+↓
+Compiler + Instrumentation
+↓
+Machine Code
++
+Sanitizer Runtime
+```
+
+程序运行时：
+
+```text
+每次关键操作
+↓
+额外检查
+↓
+发现问题
+→ 输出报告
+```
+
+因此 Sanitizer 属于：
+
+```text
+Dynamic Analysis
+```
+
+即：
+
+> 必须真正运行程序，才能检测实际执行路径中的问题。
+
+---
+
+# 3. Static Analysis 与 Dynamic Analysis
+
+Static Analysis：
+
+```text
+不运行程序
+↓
+分析源码 / AST / 编译信息
+```
+
+例如：
+
+```text
+compiler warnings
+clang-tidy
+cppcheck
+```
+
+Dynamic Analysis：
+
+```text
+真正运行程序
+↓
+观察运行行为
+```
+
+例如：
+
+```text
+ASan
+UBSan
+TSan
+```
+
+两者不能互相完全替代。
+
+---
+
+# 4. ASan
+
+全名：
+
+```text
+AddressSanitizer
+```
+
+主要检查：
+
+```text
+heap-buffer-overflow
+stack-buffer-overflow
+use-after-free
+double free
+部分 memory leak
+```
+
+核心：
+
+> 检查某个内存地址是否允许被访问。
+
+---
+
+# 5. ASan Demo
+
+Demo：
+
+```cpp
+int* numbers =
+    new int[3];
+
+numbers[0] = 10;
+numbers[1] = 20;
+numbers[2] = 30;
+
+std::cout
+    << numbers[3];
+```
+
+合法：
+
+```text
+numbers[0]
+numbers[1]
+numbers[2]
+```
+
+非法：
+
+```text
+numbers[3]
+```
+
+TSan 报告：
+
+```text
+ERROR: AddressSanitizer:
+heap-buffer-overflow
+```
+
+---
+
+# 6. ASan 报告怎么看
+
+推荐顺序：
+
+```text
+1. ERROR 类型
+2. READ / WRITE
+3. size
+4. thread
+5. #0 源码位置
+6. region
+7. allocated here
+8. SUMMARY
+9. Shadow Memory
+```
+
+---
+
+## READ of size 4
+
+报告：
+
+```text
+READ of size 4
+```
+
+说明：
+
+```text
+非法读取
+```
+
+不是写入。
+
+为什么 4：
+
+```text
+sizeof(int) = 4
+```
+
+---
+
+## #0
+
+例如：
+
+```text
+#0 main /tmp/asan_demo.cpp:17
+```
+
+表示：
+
+```text
+错误真正发生在自己的第 17 行代码
+```
+
+后面的：
+
+```text
+libc
+_start
+```
+
+一般不是第一优先级。
+
+---
+
+# 7. ASan Region 信息
+
+报告：
+
+```text
+12-byte region
+```
+
+因为：
+
+```text
+new int[3]
+
+3 × sizeof(int)
+=
+3 × 4
+=
+12 bytes
+```
+
+报告：
+
+```text
+0 bytes to the right
+```
+
+表示访问地址恰好位于：
+
+```text
+合法区域右边界之后
+```
+
+也就是：
+
+```text
+numbers[3]
+```
+
+正好从第 13 个字节开始。
+
+---
+
+# 8. Shadow Memory
+
+ASan 维护：
+
+```text
+Shadow Memory
+```
+
+大致：
+
+```text
+1 Shadow Byte
+描述
+8 Application Bytes
+```
+
+例如：
+
+```text
+00
+```
+
+表示：
+
+```text
+8 bytes 全部可访问
+```
+
+而：
+
+```text
+04
+```
+
+表示：
+
+```text
+这 8 bytes 中
+前 4 bytes 可访问
+```
+
+我们的数组：
+
+```text
+12 bytes
+```
+
+因此：
+
+```text
+8 bytes
++
+4 bytes
+```
+
+对应：
+
+```text
+00 04
+```
+
+---
+
+# 9. Redzone
+
+ASan 在对象周围放：
+
+```text
+不可访问区域
+```
+
+称：
+
+```text
+Redzone
+```
+
+如果程序访问：
+
+```text
+对象左侧
+对象右侧
+```
+
+就进入 Redzone。
+
+ASan 可以据此检测：
+
+```text
+buffer overflow
+```
+
+---
+
+# 10. 为什么普通程序不一定崩
+
+操作系统的内存保护粒度通常是：
+
+```text
+Page
+```
+
+而不是：
+
+```text
+单个 C++ 对象
+```
+
+所以：
+
+```text
+p[3]
+```
+
+虽然已经越过 C++ 对象边界，但那个虚拟内存页可能仍然属于进程。
+
+OS 不一定产生：
+
+```text
+Segmentation Fault
+```
+
+而 ASan 知道：
+
+```text
+对象实际只有多少字节
+```
+
+所以检测更精细。
+
+---
+
+# 11. UBSan
+
+全名：
+
+```text
+UndefinedBehaviorSanitizer
+```
+
+主要检查：
+
+```text
+C++ Undefined Behavior
+```
+
+例如：
+
+```text
+signed integer overflow
+非法 shift
+alignment 问题
+部分 null pointer 操作
+非法类型行为
+```
+
+---
+
+# 12. Undefined Behavior
+
+Undefined Behavior：
+
+> C++ 标准不再规定程序必须发生什么。
+
+不是：
+
+```text
+“结果随机”
+```
+
+而是：
+
+```text
+标准完全不给行为保证
+```
+
+---
+
+# 13. Signed Integer Overflow Demo
+
+代码：
+
+```cpp
+int value =
+    INT_MAX;
+
+value += 1;
+```
+
+普通程序实际输出：
+
+```text
+-2147483648
+```
+
+但这不代表 C++ 规定：
+
+```text
+INT_MAX + 1
+=
+INT_MIN
+```
+
+因为：
+
+```text
+signed integer overflow
+```
+
+在 C++ 中是：
+
+```text
+Undefined Behavior
+```
+
+---
+
+# 14. CPU 行为和 C++ 语言语义不同
+
+机器使用补码。
+
+例如：
+
+```text
+011111...111
++
+1
+=
+100000...000
+```
+
+实际位模式对应：
+
+```text
+INT_MIN
+```
+
+所以某次运行会看到：
+
+```text
+-2147483648
+```
+
+但是：
+
+```text
+CPU 实际行为
+≠
+C++ 标准保证
+```
+
+程序不能依赖这种行为。
+
+---
+
+# 15. 为什么 Signed Overflow 是 UB 很危险
+
+编译器可以假设：
+
+```text
+合法程序不会发生 signed overflow
+```
+
+因此进行优化。
+
+例如：
+
+```cpp
+bool greater(int x)
+{
+    return x + 1 > x;
+}
+```
+
+如果假设：
+
+```text
+不存在 signed overflow
+```
+
+那么编译器可以认为：
+
+```text
+x + 1
+永远大于 x
+```
+
+因此可能优化成：
+
+```cpp
+return true;
+```
+
+这就是：
+
+```text
+Debug 看起来正常
+Release -O2 出问题
+```
+
+有时和 UB 有关系。
+
+---
+
+# 16. Unsigned Overflow
+
+和 signed 不同。
+
+例如：
+
+```cpp
+unsigned int value =
+    UINT_MAX;
+
+value += 1;
+```
+
+结果：
+
+```text
+0
+```
+
+这是 C++ 明确定义的：
+
+```text
+modulo arithmetic
+```
+
+所以：
+
+```text
+signed overflow
+→ UB
+
+unsigned overflow
+→ 合法 wraparound
+```
+
+---
+
+# 17. 为什么 Hash64 使用 uint64_t
+
+ForgeBuild 的 FNV-1a：
+
+```text
+hash *= prime
+```
+
+会频繁发生整数回绕。
+
+如果使用：
+
+```text
+std::uint64_t
+```
+
+则：
+
+```text
+modulo 2^64
+```
+
+是合法且预期的。
+
+如果错误使用：
+
+```text
+std::int64_t
+```
+
+发生 overflow：
+
+```text
+可能进入 UB
+```
+
+---
+
+# 18. UBSan 实验结果
+
+UBSan 报：
+
+```text
+runtime error:
+signed integer overflow:
+2147483647 + 1
+cannot be represented in type 'int'
+```
+
+但程序随后仍输出：
+
+```text
+-2147483648
+```
+
+原因：
+
+```text
+UBSan 默认很多检查采用 recover 模式
+```
+
+即：
+
+```text
+发现 UB
+↓
+报告
+↓
+程序继续执行
+```
+
+---
+
+# 19. ASan 与 UBSan 区别
+
+ASan：
+
+```text
+这个内存地址是否合法？
+```
+
+UBSan：
+
+```text
+这个 C++ 行为是否合法？
+```
+
+例如：
+
+```text
+数组越界
+→ ASan
+
+signed integer overflow
+→ UBSan
+```
+
+---
+
+# 20. ForgeBuild ASan + UBSan Build
+
+建立独立目录：
+
+```text
+build/sanitize
+```
+
+参数：
+
+```text
+-fsanitize=address,undefined
+-fno-omit-frame-pointer
+```
+
+目的：
+
+```text
+ASan
++
+UBSan
+```
+
+同时检查。
+
+之所以不用：
+
+```text
+build/debug
+```
+
+直接改参数，是为了不同构建配置隔离。
+
+结构：
+
+```text
+ForgeBuild source
+├── build/debug
+└── build/sanitize
+```
+
+---
+
+# 21. 为什么编译和链接都要 Sanitizer 参数
+
+编译阶段：
+
+```text
+插入 instrumentation
+```
+
+链接阶段：
+
+```text
+链接 Sanitizer Runtime
+```
+
+所以两边都要：
+
+```text
+-fsanitize=...
+```
+
+---
+
+# 22. ForgeBuild ASan / UBSan 结果
+
+首先运行：
+
+```text
+CTest
+```
+
+结果：
+
+```text
+5/5 passed
+```
+
+没有：
+
+```text
+AddressSanitizer ERROR
+UBSan runtime error
+```
+
+然后运行：
+
+```text
+32 compile
++
+1 link
++
+4 Worker
+```
+
+端到端构建。
+
+结果：
+
+```text
+planned edge count: 33
+build succeeded
+```
+
+程序：
+
+```text
+4050231475312910501
+```
+
+整个过程：
+
+```text
+无 ASan
+无 UBSan
+```
+
+---
+
+# 23. 被 Sanitizer 检查的是谁
+
+运行：
+
+```text
+build/sanitize/forge
+```
+
+被检查的是：
+
+```text
+ForgeBuild 自己
+```
+
+包括：
+
+```text
+Parser
+Graph
+Builder
+Planner
+Scheduler
+Executor
+LocalCache
+Hash
+...
+```
+
+但是 ForgeBuild 启动：
+
+```text
+g++ benchmark/src/file.cpp
+```
+
+这个子进程不会自动带：
+
+```text
+-fsanitize
+```
+
+因此：
+
+```text
+benchmark/out/app
+```
+
+不是 Sanitizer 程序。
+
+Sanitizer 属性不会自动从：
+
+```text
+父进程
+```
+
+传给：
+
+```text
+子进程生成的程序
+```
+
+---
+
+# 24. TSan
+
+全名：
+
+```text
+ThreadSanitizer
+```
+
+主要检查：
+
+```text
+Data Race
+```
+
+---
+
+# 25. 什么是 Data Race
+
+可以理解为：
+
+```text
+两个或多个线程
+↓
+并发访问同一个内存位置
+↓
+至少一个是写操作
+↓
+缺少正确同步
+```
+
+例如：
+
+```cpp
+int counter = 0;
+
+Thread A:
+++counter;
+
+Thread B:
+++counter;
+```
+
+就是 Data Race。
+
+并且：
+
+> C++ 中 Data Race 本身属于 Undefined Behavior。
+
+---
+
+# 26. 为什么 counter++ 不安全
+
+```cpp
+++counter;
+```
+
+概念上：
+
+```text
+read counter
+↓
++1
+↓
+write counter
+```
+
+两个线程可能：
+
+```text
+T1 read 0
+T2 read 0
+
+T1 write 1
+T2 write 1
+```
+
+结果：
+
+```text
+counter = 1
+```
+
+而不是：
+
+```text
+2
+```
+
+这种现象：
+
+```text
+Lost Update
+```
+
+---
+
+# 27. Race Condition 与 Data Race
+
+Data Race：
+
+```text
+C++ 内存模型中的具体未同步内存访问问题
+```
+
+Race Condition：
+
+```text
+更广泛的并发逻辑问题
+程序正确性依赖线程执行顺序
+```
+
+所以：
+
+```text
+Data Race
+⊂
+更广义的并发竞争问题
+```
+
+TSan 主要擅长：
+
+```text
+Data Race
+```
+
+不是所有：
+
+```text
+Race Condition
+Deadlock
+业务逻辑并发错误
+```
+
+都能检查。
+
+---
+
+# 28. Happens-Before
+
+这是并发面试很重要的概念。
+
+可以先理解成：
+
+> 如果 A happens-before B，那么 C++ 内存模型保证 B 能按照同步规则观察到 A 应产生的效果。
+
+例如：
+
+```text
+Thread A
+修改数据
+↓
+mutex.unlock()
+
+Thread B
+mutex.lock()
+↓
+读取数据
+```
+
+同一个 mutex 建立：
+
+```text
+同步关系
+```
+
+因此：
+
+```text
+Memory Visibility
++
+Ordering
+```
+
+得到保证。
+
+---
+
+# 29. Mutex
+
+修复：
+
+```cpp
+std::mutex counter_mutex;
+
+{
+    std::lock_guard<std::mutex> lock(
+        counter_mutex
+    );
+
+    ++counter;
+}
+```
+
+每次修改：
+
+```text
+lock
+↓
+read
+↓
+modify
+↓
+write
+↓
+unlock
+```
+
+同一时间：
+
+```text
+只有一个线程进入临界区
+```
+
+并建立正确同步关系。
+
+---
+
+# 30. RAII 与 lock_guard
+
+```cpp
+std::lock_guard<std::mutex> lock(mutex);
+```
+
+构造：
+
+```text
+mutex.lock()
+```
+
+离开作用域：
+
+```text
+析构
+↓
+mutex.unlock()
+```
+
+因此不会像手动：
+
+```cpp
+lock();
+...
+unlock();
+```
+
+一样容易忘记释放。
+
+---
+
+# 31. Atomic
+
+对于简单：
+
+```text
+单整数计数
+```
+
+可以：
+
+```cpp
+std::atomic<int> counter{0};
+```
+
+然后：
+
+```cpp
+++counter;
+```
+
+无需普通 mutex。
+
+但是：
+
+```text
+atomic
+```
+
+适合：
+
+```text
+单个简单共享状态
+```
+
+如果需要一次修改：
+
+```text
+queue
++
+count
++
+failure state
+```
+
+等多个相关状态，
+
+通常：
+
+```text
+mutex
+```
+
+更容易表达一个完整：
+
+```text
+critical section
+```
+
+---
+
+# 32. TSan Demo
+
+错误版本：
+
+```cpp
+int counter = 0;
+
+两个线程：
+100000 次 ++counter
+```
+
+普通运行：
+
+```text
+counter = 193421
+```
+
+理论业务结果：
+
+```text
+200000
+```
+
+说明发生：
+
+```text
+Lost Update
+```
+
+---
+
+# 33. TSan 工具链问题
+
+第一次运行 TSan：
+
+```text
+FATAL:
+ThreadSanitizer:
+unexpected memory mapping
+```
+
+这不是：
+
+```text
+Data Race Report
+```
+
+而是：
+
+```text
+TSan Runtime 初始化失败
+```
+
+环境：
+
+```text
+Ubuntu
+Linux 6.8
+GCC 11.4
+libtsan0 11.4
+vm.mmap_rnd_bits = 32
+```
+
+旧版 TSan 和当前较大 ASLR 地址随机化范围发生虚拟地址空间冲突。
+
+---
+
+# 34. ASLR
+
+全名：
+
+```text
+Address Space Layout Randomization
+```
+
+作用：
+
+```text
+让程序
+共享库
+heap
+stack
+mmap 区域
+```
+
+在不同运行中位于不同地址。
+
+提升：
+
+```text
+攻击者预测地址的难度
+```
+
+---
+
+# 35. mmap_rnd_bits
+
+当前：
+
+```text
+vm.mmap_rnd_bits = 32
+```
+
+为了让旧 TSan 正常启动，测试时临时：
+
+```text
+32
+↓
+28
+```
+
+运行完成后：
+
+```text
+28
+↓
+32
+```
+
+必须恢复。
+
+这个操作只是：
+
+```text
+工具兼容 workaround
+```
+
+不是 ForgeBuild 的正式系统要求。
+
+---
+
+# 36. TSan 正常报告
+
+临时改为：
+
+```text
+28
+```
+
+后，TSan 抓到：
+
+```text
+WARNING:
+ThreadSanitizer:
+data race
+```
+
+报告显示：
+
+```text
+Thread T2:
+Read of size 4
+
+Thread T1:
+Previous write of size 4
+```
+
+两个访问地址相同：
+
+```text
+global counter
+```
+
+源码都在：
+
+```text
+increment()
+++counter
+```
+
+---
+
+# 37. TSan 报告怎么看
+
+推荐：
+
+```text
+1. WARNING 类型
+2. Current Read/Write
+3. Previous Read/Write
+4. 是否同一地址
+5. Shared Object
+6. Thread 创建位置
+7. SUMMARY
+```
+
+这次：
+
+```text
+T2 READ
++
+T1 WRITE
++
+global counter
++
+没有同步
+```
+
+所以明确 Data Race。
+
+---
+
+# 38. 为什么 TSan 下反而输出 200000
+
+错误代码普通运行：
+
+```text
+193421
+```
+
+TSan 下：
+
+```text
+200000
+```
+
+但仍报告 Data Race。
+
+原因：
+
+```text
+TSan instrumentation
+↓
+程序变慢
+↓
+线程调度时序变化
+```
+
+这次恰好没有体现为错误最终值。
+
+说明：
+
+> 并发程序最终输出正确，不代表不存在 Data Race。
+
+这是非常重要的工程经验。
+
+---
+
+# 39. Mutex 修复 TSan Demo
+
+加入：
+
+```cpp
+std::mutex
+std::lock_guard
+```
+
+再运行 TSan：
+
+```text
+counter = 200000
+```
+
+并且：
+
+```text
+没有 Data Race warning
+```
+
+因此形成完整验证：
+
+```text
+制造 Data Race
+↓
+TSan 抓到
+↓
+mutex 修复
+↓
+TSan clean
+```
+
+---
+
+# 40. ForgeBuild TSan Build
+
+建立：
+
+```text
+build/tsan
+```
+
+而不是把：
+
+```text
+ASan
++
+TSan
+```
+
+混在一起。
+
+因为：
+
+```text
+ASan Runtime
+和
+TSan Runtime
+```
+
+都会大规模跟踪内存访问，通常不能同时启用。
+
+因此：
+
+```text
+build/debug
+build/sanitize
+build/tsan
+```
+
+分开。
+
+---
+
+# 41. ForgeBuild CTest TSan 验证
+
+临时：
+
+```text
+mmap_rnd_bits
+32 → 28
+```
+
+运行：
+
+```text
+CTest
+```
+
+结果：
+
+```text
+5/5 passed
+```
+
+没有：
+
+```text
+ThreadSanitizer: data race
+```
+
+最后恢复：
+
+```text
+28 → 32
+```
+
+---
+
+# 42. ForgeBuild End-to-End TSan 验证
+
+更重要的是完整：
+
+```text
+32 compile
++
+1 link
++
+4 Scheduler Worker
+```
+
+使用：
+
+```text
+build/tsan/forge
+```
+
+运行。
+
+结果：
+
+```text
+planned edge count: 33
+
+build succeeded
+
+没有 TSan data race
+```
+
+最终程序：
+
+```text
+4050231475312910501
+```
+
+同时：
+
+```text
+vm.mmap_rnd_bits
+```
+
+恢复：
+
+```text
+32
+```
+
+---
+
+# 43. 为什么还需要 End-to-End
+
+CTest：
+
+```text
+偏具体模块和边界测试
+```
+
+Benchmark Build：
+
+```text
+真实完整路径
+```
+
+包括：
+
+```text
+Parser
+↓
+BuildGraph
+↓
+Builder
+↓
+BuildPlanner
+↓
+Scheduler
+↓
+Executor
+↓
+Cache
+↓
+DepsLog
+```
+
+并且持续：
+
+```text
+4 Worker
+```
+
+并发执行。
+
+所以：
+
+```text
+CTest
++
+End-to-End
+```
+
+比单独某一个更有说服力。
+
+---
+
+# 44. Sanitizer 不能证明什么
+
+即使：
+
+```text
+ASan clean
+UBSan clean
+TSan clean
+```
+
+也不能说：
+
+```text
+“ForgeBuild 没有 Bug”
+```
+
+因为 Sanitizer：
+
+```text
+Dynamic Analysis
+```
+
+只能检查：
+
+```text
+实际运行到的代码路径
+```
+
+它不能自动覆盖：
+
+```text
+所有输入
+所有错误路径
+所有线程交错
+所有 deadlock
+所有 race condition
+```
+
+正确表达应该是：
+
+> 当前自动测试和代表性端到端场景覆盖到的路径中，没有检测到相关 Sanitizer 错误。
+
+---
+
+# 45. Day13-3 面试回答
+
+如果面试官问：
+
+> 你怎么检查 C++ 内存和并发问题？
+
+可以回答：
+
+> 我为 ForgeBuild 建立了独立的 Sanitizer Build Configuration。使用 ASan 和 UBSan 检查非法内存访问及未定义行为，并针对多线程 Scheduler 使用 TSan 检查 Data Race。除了 CTest 自动测试，还使用 4 Worker、32 个编译任务的端到端场景进行动态验证，目前覆盖路径中没有发现 Sanitizer 报错。
+
+---
+
+# Day13 前三部分总体总结
+
+Day13-1 解决：
+
+```text
+怎么证明修改没有破坏已有行为？
+```
+
+答案：
+
+```text
+CTest 自动回归
+```
+
+Day13-2 解决：
+
+```text
+怎么证明并行和缓存真的有效？
+```
+
+答案：
+
+```text
+Benchmark
++
+Speedup
++
+Parallel Efficiency
++
+Incremental Scenarios
+```
+
+Day13-3 解决：
+
+```text
+怎么检查运行时内存错误、UB 和线程竞争？
+```
+
+答案：
+
+```text
+ASan
++
+UBSan
++
+TSan
+```
+
+最终形成：
+
+```text
+                ForgeBuild 工程验证
+
+           ┌────────────┬────────────┐
+           │            │            │
+           ▼            ▼            ▼
+         CTest       Benchmark    Sanitizer
+           │            │            │
+           ▼            ▼            ▼
+        Correctness   Performance  Reliability
+```
+
+这三部分组合起来以后，ForgeBuild 已经不再只是：
+
+```text
+“功能写出来了”
+```
+
+而开始具备：
+
+```text
+自动回归
+性能数据
+运行时可靠性验证
+```
+
+这也是 Day13 相比前面纯功能开发最主要的工程化提升。

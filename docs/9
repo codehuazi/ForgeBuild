@@ -1,0 +1,797 @@
+Day9 总结笔记：C++并发编程 + DAG任务调度器（ForgeBuild Scheduler）
+
+这一章非常重要，因为它对应 C++ 后端 / 基础架构岗位里面非常核心的一类能力：
+
+如何设计一个多线程任务调度系统
+
+你的 ForgeBuild Scheduler 本质上已经接近一个简化版 Ninja 的执行引擎。
+
+1. 为什么构建系统需要并发调度？
+
+先看一个普通项目：
+
+main.cpp
+   |
+   v
+main.o
+
+
+a.cpp
+   |
+   v
+a.o
+
+
+b.cpp
+   |
+   v
+b.o
+
+
+a.o
+b.o
+main.o
+   |
+   v
+ app
+
+依赖关系：
+
+compile main
+compile a
+compile b
+       |
+       v
+      link
+
+其中：
+
+compile main
+compile a
+compile b
+
+没有相互依赖。
+
+如果串行：
+
+compile main
+ ↓
+compile a
+ ↓
+compile b
+ ↓
+link
+
+浪费大量时间。
+
+如果使用 3 个线程：
+
+Worker1:
+compile main
+
+
+Worker2:
+compile a
+
+
+Worker3:
+compile b
+
+
+完成后：
+
+Worker:
+link
+
+编译速度明显提升。
+
+所以构建系统核心问题：
+
+在满足依赖关系的前提下，尽可能并行执行任务。
+
+2. DAG（有向无环图）
+
+ForgeBuild 中：
+
+Node
+
+表示：
+
+文件。
+
+例如：
+
+main.cpp
+main.o
+app
+Edge
+
+表示：
+
+一次构建动作。
+
+例如：
+
+compile:
+
+main.cpp
+    |
+    |
+    v
+main.o
+
+对应：
+
+Edge:
+input:
+    main.cpp
+
+output:
+    main.o
+
+command:
+    g++ -c main.cpp -o main.o
+
+整体：
+
+Node
+ |
+ |
+Edge
+ |
+ |
+Node
+
+形成 DAG。
+
+3. 入度（indegree）调度思想
+
+这是 Scheduler 的核心。
+
+例如：
+
+compile main
+       |
+       v
+    main.o
+       |
+       v
+     link
+
+定义：
+
+一个任务依赖多少前置任务。
+
+compile：
+
+indegree = 0
+
+因为：
+
+没有依赖。
+
+link：
+
+indegree = 1
+
+因为：
+
+需要：
+
+main.o
+
+所以：
+
+Scheduler：
+
+只执行：
+
+indegree == 0
+
+的任务。
+
+执行：
+
+compile main
+
+完成：
+
+更新：
+
+link indegree--
+
+
+变成：
+
+0
+
+link 加入 Ready Queue。
+
+这就是：
+
+拓扑排序。
+
+4. Ready Queue
+
+Scheduler 中：
+
+std::queue<Edge*> ready_queue_;
+
+表示：
+
+当前可以执行的任务。
+
+例如：
+
+初始化：
+
+ready_queue:
+
+compile a
+compile b
+compile main
+
+Worker：
+
+不断取：
+
+pop()
+
+执行。
+
+完成后：
+
+产生新的任务。
+
+例如：
+
+compile main
+
+↓
+
+link
+
+加入：
+
+ready_queue:
+link
+5. Worker Pool（线程池）
+
+你的设计：
+
+Scheduler
+
+    |
+    |
+----------------
+|      |       |
+W1     W2      W3
+
+每个 Worker：
+
+循环：
+
+while(true)
+{
+    获取任务
+
+    执行任务
+
+    通知完成
+}
+
+为什么不用创建一个线程执行一个任务？
+
+例如：
+
+10000 个 cpp 文件。
+
+如果：
+
+10000 thread
+
+问题：
+
+创建线程成本高
+上下文切换严重
+内存消耗大
+
+线程池：
+
+固定：
+
+8 worker
+
+重复利用。
+
+6. mutex：为什么需要？
+
+多线程环境：
+
+共享：
+
+ready_queue_
+
+例如：
+
+两个线程：
+
+同时：
+
+queue.pop()
+
+可能：
+
+线程A:
+
+读取队头
+
+线程B:
+
+也读取队头
+
+导致：
+
+两个任务执行一次。
+
+所以：
+
+访问共享资源：
+
+必须保护。
+
+你的：
+
+std::mutex mutex_;
+
+保护：
+
+1.
+
+任务队列：
+
+ready_queue_
+2.
+
+依赖状态：
+
+indegree_
+3.
+
+统计：
+
+completed_edges_
+
+典型：
+
+{
+    std::lock_guard<std::mutex> lock(
+        mutex_
+    );
+
+
+    ready_queue_.push(edge);
+}
+7. lock_guard
+
+特点：
+
+自动释放锁。
+
+例如：
+
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    data++;
+}
+
+等价：
+
+进入作用域：
+
+lock()
+
+执行代码
+
+
+离开作用域：
+
+unlock()
+
+优点：
+
+不会忘记：
+
+unlock()
+
+避免：
+
+异常导致死锁。
+
+8. unique_lock
+
+你第一次接触容易混淆。
+
+区别：
+
+lock_guard
+
+简单：
+
+加锁
+执行
+释放
+
+不能中途释放。
+
+unique_lock
+
+更灵活：
+
+支持：
+
+lock
+
+unlock
+
+重新lock
+
+condition_variable必须使用它。
+
+9. condition_variable
+
+解决：
+
+没任务时线程怎么办？
+
+错误：
+
+while(queue.empty())
+{
+    continue;
+}
+
+叫：
+
+忙等待。
+
+CPU一直跑。
+
+正确：
+
+没有任务
+
+↓
+
+睡眠
+
+↓
+
+有任务
+
+↓
+
+唤醒
+
+代码：
+
+condition_.wait(
+    lock,
+    predicate
+);
+
+例如：
+
+condition_.wait(
+    lock,
+    [this]()
+    {
+        return !ready_queue_.empty();
+    }
+);
+
+含义：
+
+如果：
+
+queue为空
+
+睡。
+
+如果：
+
+queue有任务
+
+继续。
+
+10. 为什么 wait 需要 unique_lock？
+
+因为内部流程：
+
+拿锁
+
+↓
+
+检查条件
+
+↓
+
+释放锁
+
+↓
+
+睡眠
+
+↓
+
+被notify
+
+↓
+
+重新拿锁
+
+↓
+
+继续执行
+
+lock_guard无法完成：
+
+释放 + 再获取
+11. finished_condition_
+
+你的第二个条件变量：
+
+非常重要。
+
+为什么需要两个？
+
+因为两个事件不同：
+
+Worker等待任务
+condition_
+
+事件：
+
+ready_queue变化
+主线程等待完成
+finished_condition_
+
+事件：
+
+completed_edges变化
+
+不要所有东西共用一个 condition_variable。
+
+工程中：
+
+不同事件通常分开。
+
+12. Failure Propagation（失败传播）
+
+这是构建系统必须有的。
+
+例如：
+
+compile broken.cpp
+        |
+        X
+        |
+      broken.o
+        |
+        v
+       link
+
+如果 compile 失败：
+
+link不能执行。
+
+你的设计：
+
+失败：
+
+failed_=true;
+
+然后：
+
+notify_all();
+
+Worker：
+
+检查：
+
+if(failed_)
+{
+    break;
+}
+
+停止领取任务。
+
+13. Deadlock（死锁）
+
+你刚才亲手遇到了。
+
+错误：
+
+worker()
+{
+    lock(mutex_);
+
+    finish_edge();
+}
+
+而：
+
+finish_edge()
+{
+    lock(mutex_);
+}
+
+流程：
+
+线程拿锁
+
+↓
+
+调用函数
+
+↓
+
+函数再次请求同一把锁
+
+↓
+
+等待自己释放
+
+↓
+
+永远等待
+
+解决：
+
+明确：
+
+谁负责锁。
+
+你的最终设计：
+
+worker:
+
+调用finish_edge
+
+
+finish_edge:
+
+负责加锁
+14. 数据竞争（Data Race）
+
+例如：
+
+两个线程：
+
+completed_edges_++;
+
+不是原子操作。
+
+实际上：
+
+读取
+
++
+
+计算
+
++
+
+写回
+
+可能交叉。
+
+解决：
+
+复杂状态：
+
+mutex。
+
+简单状态：
+
+atomic。
+
+例如：
+
+std::atomic<bool> failed_;
+
+适合：
+
+true/false
+15. 当前 ForgeBuild Scheduler 架构总结
+
+最终：
+
+             BuildPlan
+
+                 |
+                 v
+
+            Scheduler
+
+       +----------------+
+       |                |
+       v                v
+
+  Ready Queue       State
+
+
+       |
+       v
+
+
+    Worker Pool
+
+
+  W1      W2      W3
+
+
+       |
+       v
+
+
+    Executor
+
+
+       |
+       v
+
+
+ system(command)
+
+
+
+       |
+       v
+
+
+ finish_edge()
+
+
+       |
+       +--> completed++
+       |
+       +--> indegree--
+       |
+       +--> push ready task
+       |
+       +--> notify
+
+16. 面试如何介绍这个模块？
+
+不要说：
+
+写了一个线程池。
+
+太普通。
+
+建议：
+
+这样说：
+
+在 ForgeBuild 中负责实现 DAG 构建调度模块，基于任务依赖图维护 Edge 入度状态，通过 Ready Queue 管理可执行任务，并设计 Worker Pool 配合 mutex 和 condition_variable 实现并行调度；同时支持任务失败传播和构建状态同步。
+
+这个描述明显高级很多。
+
+Day9 学习成果
+
+你已经掌握：
+
+知识	ForgeBuild对应
+std::thread	Worker
+mutex	共享状态保护
+lock_guard	普通临界区
+unique_lock	条件变量等待
+condition_variable	事件驱动
+thread pool	Worker Pool
+DAG	构建依赖
+topological scheduling	任务调度
+atomic	简单状态
+deadlock	锁设计
+failure propagation	错误控制

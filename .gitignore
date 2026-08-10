@@ -17,3 +17,34 @@
 
 # Runtime output
 *.log
+# ForgeBuild runtime state
+/.forge_cache/
+/.forge_deps
+/.forge_log
+
+# Dependency files
+*.d
+
+# Benchmark build output
+/benchmark/out/
+
+# Local demo executable
+/app
+
+# Test-generated files
+/generated.cpp
+/generated.hpp
+
+# Test-generated files
+/generated.cpp
+/generated.hpp
+
+# Test temporary files created when demos run from repository root
+/hash_test_input.txt
+/cache_key_test.hpp
+/config.h
+
+# Test temporary files created when demos run from repository root
+/hash_test_input.txt
+/cache_key_test.hpp
+/config.h

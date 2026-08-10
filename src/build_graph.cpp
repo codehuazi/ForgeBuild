@@ -2,10 +2,15 @@
 
 #include "forge/node.hpp"
 #include "forge/edge.hpp"
+#include "forge/rule.hpp"
+
+#include <iostream>
 
 #include <stdexcept>
 
 namespace forge {
+
+BuildGraph::BuildGraph() = default;
 
 BuildGraph::~BuildGraph() = default;
 
@@ -68,6 +73,100 @@ void BuildGraph::add_output(Edge* edge, Node* node)
     
     edge->add_output(node);
     node->set_in_edge(edge);
+}
+
+void BuildGraph::dump() const
+{
+
+    std::cout
+        << "===== Build Graph =====\n";
+
+
+    std::cout
+        << "\nNodes:\n";
+
+
+    for(auto& [path,node] : nodes_)
+    {
+
+        std::cout
+            << "  "
+            << path
+            << "\n";
+
+    }
+
+
+    std::cout
+        << "\nEdges:\n";
+
+
+    for(auto& edge_ptr : edges_)
+    {
+
+        auto* edge =
+            edge_ptr.get();
+
+
+        std::cout
+            << "Edge\n";
+
+
+        std::cout
+            << " Rule: "
+            << edge->rule()->name()
+            << "\n";
+
+
+        std::cout
+            << " Inputs:\n";
+
+
+        for(auto* node :
+            edge->inputs())
+        {
+
+            std::cout
+                << "   "
+                << node->path()
+                << "\n";
+
+        }
+
+
+        std::cout
+            << " Outputs:\n";
+
+
+        for(auto* node :
+            edge->outputs())
+        {
+
+            std::cout
+                << "   "
+                << node->path()
+                << "\n";
+
+        }
+
+    }
+
+
+}
+
+const std::vector<
+    std::unique_ptr<Edge>
+>& BuildGraph::edges() const
+{
+    return edges_;
+}
+
+const std::unordered_map<
+    std::string,
+    std::unique_ptr<Node>
+>& BuildGraph::nodes() const
+{
+    return nodes_;
 }
 
 }

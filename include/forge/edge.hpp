@@ -2,6 +2,8 @@
 
 #include <vector>
 
+#include <string>
+
 
 namespace forge {
 
@@ -17,9 +19,21 @@ public:
 
     explicit Edge(Rule* rule);
 
+    Rule* rule() const;
+
+    bool needs_build() const;
+
+    std::string describe() const;
+
+    std::string command() const;
+
+    std::string depfile() const;
+
+    bool depends_on(
+        const Edge* other
+    ) const;
 
     void add_input(Node* node);
-
 
     void add_output(Node* node);
 

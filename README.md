@@ -26,3 +26,9 @@ Day2 已完成核心构建图模型：
 main.cpp --compile--> main.o --\
                                 link --> app
 math.cpp --compile--> math.o --/
+
+构建
+cmake -S . -B build/debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/debug
+运行
+./build/debug/graph_demo

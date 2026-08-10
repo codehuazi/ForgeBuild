@@ -1,0 +1,40 @@
+rule compile
+ command = g++ -std=c++20 -O2 -Ibenchmark/include -MMD -MF $out.d -c $in -o $out
+ depfile = $out.d
+
+rule link
+ command = g++ $in -o $out
+
+build benchmark/out/file_00.o: compile benchmark/src/file_00.cpp
+build benchmark/out/file_01.o: compile benchmark/src/file_01.cpp
+build benchmark/out/file_02.o: compile benchmark/src/file_02.cpp
+build benchmark/out/file_03.o: compile benchmark/src/file_03.cpp
+build benchmark/out/file_04.o: compile benchmark/src/file_04.cpp
+build benchmark/out/file_05.o: compile benchmark/src/file_05.cpp
+build benchmark/out/file_06.o: compile benchmark/src/file_06.cpp
+build benchmark/out/file_07.o: compile benchmark/src/file_07.cpp
+build benchmark/out/file_08.o: compile benchmark/src/file_08.cpp
+build benchmark/out/file_09.o: compile benchmark/src/file_09.cpp
+build benchmark/out/file_10.o: compile benchmark/src/file_10.cpp
+build benchmark/out/file_11.o: compile benchmark/src/file_11.cpp
+build benchmark/out/file_12.o: compile benchmark/src/file_12.cpp
+build benchmark/out/file_13.o: compile benchmark/src/file_13.cpp
+build benchmark/out/file_14.o: compile benchmark/src/file_14.cpp
+build benchmark/out/file_15.o: compile benchmark/src/file_15.cpp
+build benchmark/out/file_16.o: compile benchmark/src/file_16.cpp
+build benchmark/out/file_17.o: compile benchmark/src/file_17.cpp
+build benchmark/out/file_18.o: compile benchmark/src/file_18.cpp
+build benchmark/out/file_19.o: compile benchmark/src/file_19.cpp
+build benchmark/out/file_20.o: compile benchmark/src/file_20.cpp
+build benchmark/out/file_21.o: compile benchmark/src/file_21.cpp
+build benchmark/out/file_22.o: compile benchmark/src/file_22.cpp
+build benchmark/out/file_23.o: compile benchmark/src/file_23.cpp
+build benchmark/out/file_24.o: compile benchmark/src/file_24.cpp
+build benchmark/out/file_25.o: compile benchmark/src/file_25.cpp
+build benchmark/out/file_26.o: compile benchmark/src/file_26.cpp
+build benchmark/out/file_27.o: compile benchmark/src/file_27.cpp
+build benchmark/out/file_28.o: compile benchmark/src/file_28.cpp
+build benchmark/out/file_29.o: compile benchmark/src/file_29.cpp
+build benchmark/out/file_30.o: compile benchmark/src/file_30.cpp
+build benchmark/out/main.o: compile benchmark/src/main.cpp
+build benchmark/out/app: link benchmark/out/file_00.o benchmark/out/file_01.o benchmark/out/file_02.o benchmark/out/file_03.o benchmark/out/file_04.o benchmark/out/file_05.o benchmark/out/file_06.o benchmark/out/file_07.o benchmark/out/file_08.o benchmark/out/file_09.o benchmark/out/file_10.o benchmark/out/file_11.o benchmark/out/file_12.o benchmark/out/file_13.o benchmark/out/file_14.o benchmark/out/file_15.o benchmark/out/file_16.o benchmark/out/file_17.o benchmark/out/file_18.o benchmark/out/file_19.o benchmark/out/file_20.o benchmark/out/file_21.o benchmark/out/file_22.o benchmark/out/file_23.o benchmark/out/file_24.o benchmark/out/file_25.o benchmark/out/file_26.o benchmark/out/file_27.o benchmark/out/file_28.o benchmark/out/file_29.o benchmark/out/file_30.o benchmark/out/main.o
