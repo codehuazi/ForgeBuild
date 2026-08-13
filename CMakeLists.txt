@@ -33,6 +33,7 @@ add_library(
         src/file_system.cpp
         src/hash.cpp
         src/cache_key.cpp
+        src/compiler_identity.cpp
         src/build_log.cpp
         src/scheduler.cpp
         src/depfile.cpp
@@ -155,6 +156,17 @@ target_link_libraries(
     hash_demo
     PRIVATE
     forge_core
+)
+
+add_executable(
+    compiler_identity_demo
+    tests/compiler_identity_demo.cpp
+)
+
+target_link_libraries(
+    compiler_identity_demo
+    PRIVATE
+        forge_core
 )
 
 add_executable(
@@ -372,12 +384,18 @@ if(BUILD_TESTING)
         COMMAND local_cache_demo
     )
 
+    add_test(
+        NAME compiler_identity
+        COMMAND compiler_identity_demo
+    )
+
     set_tests_properties(
         scheduler_guard
         scheduler_multi_output
         scheduler_failure
         hash
         local_cache
+        compiler_identity
         PROPERTIES
             TIMEOUT 5
     )

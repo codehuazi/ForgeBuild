@@ -246,6 +246,84 @@ int main()
         key1 != key3
     );
 
+        const std::string compiler_identity1 =
+        "/usr/bin/g++|gcc-11.4.0";
+
+    const std::string compiler_identity2 =
+        "/usr/bin/g++|gcc-11.4.0";
+
+    const std::string compiler_identity3 =
+        "/usr/bin/g++|gcc-13.2.0";
+
+
+    forge::CacheKeyBuilder compiler_key1;
+
+    compiler_key1.add_compiler_identity(
+        compiler_identity1
+    );
+
+    compiler_key1.add_command(
+        command1
+    );
+
+
+    forge::CacheKeyBuilder compiler_key2;
+
+    compiler_key2.add_compiler_identity(
+        compiler_identity2
+    );
+
+    compiler_key2.add_command(
+        command1
+    );
+
+
+    forge::CacheKeyBuilder compiler_key3;
+
+    compiler_key3.add_compiler_identity(
+        compiler_identity3
+    );
+
+    compiler_key3.add_command(
+        command1
+    );
+
+
+    const std::uint64_t compiler_cache_key1 =
+        compiler_key1.value();
+
+    const std::uint64_t compiler_cache_key2 =
+        compiler_key2.value();
+
+    const std::uint64_t compiler_cache_key3 =
+        compiler_key3.value();
+
+
+    std::cout
+        << "compiler cache key1: "
+        << compiler_cache_key1
+        << '\n';
+
+    std::cout
+        << "compiler cache key2: "
+        << compiler_cache_key2
+        << '\n';
+
+    std::cout
+        << "compiler cache key3: "
+        << compiler_cache_key3
+        << '\n';
+
+
+    assert(
+        compiler_cache_key1
+        == compiler_cache_key2
+    );
+
+    assert(
+        compiler_cache_key1
+        != compiler_cache_key3
+    );
 
     {
         std::ofstream output(

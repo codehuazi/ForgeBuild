@@ -120,11 +120,40 @@ bool Executor::execute_edge(
         edge->depfile();
 
 
-    const bool cacheable =
+        const bool cache_candidate =
         local_cache_ != nullptr
         && deps_log_ != nullptr
         && !depfile_path.empty()
         && edge->outputs().size() == 1;
+
+
+    std::string compiler_identity;
+
+
+    bool cacheable = false;
+
+
+    if(cache_candidate)
+    {
+        cacheable =
+            compiler_identity_cache_.get(
+                command,
+                compiler_identity
+            );
+
+
+        if(!cacheable)
+        {
+            std::lock_guard<std::mutex> lock(
+                output_mutex_
+            );
+
+
+            std::cout
+                << "cache disabled: "
+                << "compiler identity unavailable\n";
+        }
+    }
 
 
     std::uint64_t cache_key = 0;
@@ -146,6 +175,11 @@ bool Executor::execute_edge(
             ))
         {
             CacheKeyBuilder key_builder;
+
+
+            key_builder.add_compiler_identity(
+                compiler_identity
+            );
 
 
             key_builder.add_command(
@@ -350,6 +384,11 @@ bool Executor::execute_edge(
             ))
         {
             CacheKeyBuilder key_builder;
+
+
+            key_builder.add_compiler_identity(
+                compiler_identity
+            );
 
 
             key_builder.add_command(

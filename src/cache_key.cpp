@@ -10,10 +10,20 @@ namespace
 
 
 constexpr std::string_view cache_version =
-    "ForgeBuildCacheV1";
+    "ForgeBuildCacheV2";
 
 
 } // namespace
+
+void CacheKeyBuilder::add_compiler_identity(
+    std::string_view compiler_identity
+)
+{
+    add_field(
+        "compiler_identity",
+        compiler_identity
+    );
+}
 
 
 CacheKeyBuilder::CacheKeyBuilder()

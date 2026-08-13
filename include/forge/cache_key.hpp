@@ -18,6 +18,9 @@ public:
 
     CacheKeyBuilder();
 
+    void add_compiler_identity(
+        std::string_view compiler_identity
+    );
 
     void add_command(
         std::string_view command

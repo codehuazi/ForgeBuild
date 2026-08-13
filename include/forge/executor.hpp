@@ -1,5 +1,7 @@
 #pragma once
 
+#include "forge/compiler_identity.hpp"
+
 #include <mutex>
 
 namespace forge
@@ -73,6 +75,12 @@ private:
 
     LocalCache* local_cache_;
 
+    //
+    // Executor 会被多个 Scheduler Worker 共享。
+    // CompilerIdentityCache 内部负责线程安全，
+    // 避免对同一编译器重复解析路径和计算文件 Hash。
+    //
+    CompilerIdentityCache compiler_identity_cache_;
 };
 
 }
