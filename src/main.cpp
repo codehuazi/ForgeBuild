@@ -7,6 +7,7 @@
 #include "forge/parser.hpp"
 #include "forge/scheduler.hpp"
 #include "forge/local_cache.hpp"
+#include "forge/edge.hpp"
 
 #include <iostream>
 #include <string>
@@ -20,6 +21,8 @@ struct CommandLineOptions
 {
     int jobs = 1;
 
+    bool explain = false;
+
     std::string manifest_path;
 };
 
@@ -27,7 +30,7 @@ struct CommandLineOptions
 void print_usage()
 {
     std::cerr
-        << "usage: forge [-j N | -jN] <manifest-file>\n";
+        << "usage: forge [--explain] [-j N | -jN] <manifest-file>\n";
 }
 
 
@@ -85,6 +88,13 @@ bool parse_command_line(
         const std::string argument =
             argv[i];
 
+        if (argument
+            == "--explain")
+        {
+            options.explain = true;
+
+            continue;
+        }
 
         if (argument == "-j")
         {
@@ -292,15 +302,35 @@ int main(
         deps_log
     );
 
-
     forge::BuildPlan plan =
         builder.build();
-
 
     std::cout
         << "planned edge count: "
         << plan.edges().size()
         << '\n';
+
+    if (options.explain)
+    {
+        for (const forge::Edge* edge :
+             plan.edges())
+        {
+            std::cout
+                << "[dirty] "
+                << edge->describe()
+                << '\n';
+
+
+            for (const std::string& reason :
+                 builder.reasons(edge))
+            {
+                std::cout
+                    << "  - "
+                    << reason
+                    << '\n';
+            }
+        }
+    }
 
 
     if (plan.edges().empty())

@@ -94,6 +94,31 @@ BuildPlan Builder::build()
 }
 
 
+const std::vector<std::string>& Builder::reasons(
+    const Edge* edge
+) const
+{
+    static const std::vector<std::string>
+        empty_reasons;
+
+
+    const auto iterator =
+        reasons_.find(
+            edge
+        );
+
+
+    if (iterator
+        == reasons_.end())
+    {
+        return empty_reasons;
+    }
+
+
+    return iterator->second;
+}
+
+
 void Builder::refresh_nodes()
 {
     for (const auto& entry : graph_.nodes())
@@ -102,13 +127,54 @@ void Builder::refresh_nodes()
     }
 }
 
-bool Builder::command_changed(
-    const Edge* edge
+
+void Builder::append_file_state_reasons(
+    const Edge* edge,
+    std::vector<std::string>& reasons
+) const
+{
+    for (const Node* output :
+         edge->outputs())
+    {
+        if (!output->exists())
+        {
+            reasons.push_back(
+                "output missing: "
+                + output->path()
+            );
+        }
+    }
+
+
+    for (const Node* input :
+         edge->inputs())
+    {
+        for (const Node* output :
+             edge->outputs())
+        {
+            if (input->timestamp()
+                > output->timestamp())
+            {
+                reasons.push_back(
+                    "input newer than output: "
+                    + input->path()
+                    + " -> "
+                    + output->path()
+                );
+            }
+        }
+    }
+}
+
+
+void Builder::append_command_change_reasons(
+    const Edge* edge,
+    std::vector<std::string>& reasons
 ) const
 {
     if (build_log_ == nullptr)
     {
-        return false;
+        return;
     }
 
 
@@ -126,55 +192,103 @@ bool Builder::command_changed(
                 current_hash
             ))
         {
-            return true;
+            reasons.push_back(
+                "command changed for output: "
+                + output->path()
+            );
         }
     }
-
-
-    return false;
 }
 
 
-bool Builder::dynamic_dependency_changed(
-    const Edge* edge
+void Builder::append_dynamic_dependency_reasons(
+    const Edge* edge,
+    std::vector<std::string>& reasons
 ) const
 {
     if (deps_log_ == nullptr)
     {
-        return false;
+        return;
     }
 
-    for (const Node* output : edge->outputs())
+
+    for (const Node* output :
+         edge->outputs())
     {
         const std::string& output_path =
             output->path();
 
-        if (!deps_log_->contains(output_path))
+
+        if (!deps_log_->contains(
+                output_path
+            ))
         {
             continue;
         }
 
-        const auto& dependencies =
-            deps_log_->inputs(output_path);
 
-        for (const std::string& dependency :
+        const auto& dependencies =
+            deps_log_->inputs(
+                output_path
+            );
+
+            
+                for (const std::string& dependency :
              dependencies)
         {
-            if (!FileSystem::exists(dependency))
+            bool is_explicit_input = false;
+
+
+            for (const Node* input :
+                 edge->inputs())
             {
-                return true;
+                if (input->path()
+                    == dependency)
+                {
+                    is_explicit_input = true;
+
+                    break;
+                }
             }
 
-            if (FileSystem::timestamp(dependency)
+
+            if (is_explicit_input)
+            {
+                continue;
+            }
+
+
+            if (!FileSystem::exists(
+                    dependency
+                ))
+            {
+                reasons.push_back(
+                    "dynamic dependency missing: "
+                    + dependency
+                    + " -> "
+                    + output_path
+                );
+
+                continue;
+            }
+
+
+            if (FileSystem::timestamp(
+                    dependency
+                )
                 > output->timestamp())
             {
-                return true;
+                reasons.push_back(
+                    "dynamic dependency newer than output: "
+                    + dependency
+                    + " -> "
+                    + output_path
+                );
             }
         }
     }
-
-    return false;
 }
+
 
 std::vector<Edge*> Builder::collect_edges_to_build()
 {
@@ -184,6 +298,8 @@ std::vector<Edge*> Builder::collect_edges_to_build()
 
     std::unordered_set<Edge*> queued_edges;
 
+    reasons_.clear();
+
 
     // 第一阶段：找到因为真实磁盘状态而直接过期的 Edge。
     for (const auto& edge_owner : graph_.edges())
@@ -191,27 +307,50 @@ std::vector<Edge*> Builder::collect_edges_to_build()
         Edge* edge =
             edge_owner.get();
 
-        const bool file_state_requires_build =
-            edge->needs_build();
-
-        const bool command_requires_build =
-            command_changed(edge);
-
-        const bool dependency_requires_build =
-            dynamic_dependency_changed(edge);
+        std::vector<std::string>
+            edge_reasons;
 
 
-        if (!file_state_requires_build
-            && !command_requires_build
-            && !dependency_requires_build)
+        append_file_state_reasons(
+            edge,
+            edge_reasons
+        );
+
+
+        append_command_change_reasons(
+            edge,
+            edge_reasons
+        );
+
+
+        append_dynamic_dependency_reasons(
+            edge,
+            edge_reasons
+        );
+
+
+        if (edge_reasons.empty())
         {
             continue;
         }
 
 
-        pending_edges.push(edge);
+        reasons_.emplace(
+            edge,
+            std::move(
+                edge_reasons
+            )
+        );
 
-        queued_edges.insert(edge);
+
+        pending_edges.push(
+            edge
+        );
+
+
+        queued_edges.insert(
+            edge
+        );
     }
 
 
@@ -232,12 +371,23 @@ std::vector<Edge*> Builder::collect_edges_to_build()
             output->mark_dirty();
 
 
-            for (Edge* dependent_edge : output->out_edges())
+            for (Edge* dependent_edge :
+                 output->out_edges())
             {
-                bool inserted =
+                reasons_[dependent_edge]
+                    .push_back(
+                        "upstream output is dirty: "
+                        + output->path()
+                    );
+
+
+                const bool inserted =
                     queued_edges
-                        .insert(dependent_edge)
+                        .insert(
+                            dependent_edge
+                        )
                         .second;
+
 
                 if (inserted)
                 {

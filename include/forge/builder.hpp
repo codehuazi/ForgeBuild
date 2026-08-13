@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "forge/build_plan.hpp"
@@ -41,6 +43,10 @@ public:
 
     BuildPlan build();
 
+    const std::vector<std::string>& reasons(
+        const Edge* edge
+    ) const;
+
 private:
 
 
@@ -48,12 +54,22 @@ private:
 
     std::vector<Edge*> collect_edges_to_build();
 
-    bool command_changed(
-        const Edge* edge
+
+    void append_file_state_reasons(
+        const Edge* edge,
+        std::vector<std::string>& reasons
     ) const;
 
-    bool dynamic_dependency_changed(
-        const Edge* edge
+
+    void append_command_change_reasons(
+        const Edge* edge,
+        std::vector<std::string>& reasons
+    ) const;
+
+
+    void append_dynamic_dependency_reasons(
+        const Edge* edge,
+        std::vector<std::string>& reasons
     ) const;
 
 
@@ -65,6 +81,11 @@ private:
     const BuildLog* build_log_;
 
     const DepsLog* deps_log_;
+
+    std::unordered_map<
+        const Edge*,
+        std::vector<std::string>
+    > reasons_;
 
 };
 
