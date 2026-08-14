@@ -440,23 +440,38 @@ scheduler_multi_output
 scheduler_failure
 hash
 local_cache
+compiler_identity
+incremental_source
+incremental_header
+incremental_command
 ```
 
 当前结果：
 
 ```text
-5 / 5 tests passed
+9 / 9 tests passed
 ```
 
-主要覆盖：
+测试覆盖包括：
 
-* Scheduler 边界保护
-* 多输出任务去重
-* Failure Propagation
-* Hash / CacheKey
-* Cache Store / Restore
-* Atomic Cache Commit
-* Cache Corruption Detection
+Scheduler 正确性
+非法调度状态保护
+Multi-Output Edge 去重执行
+任务失败向下游传播
+Hash / Content Cache
+增量 Hash 与 Cache Key
+Compiler Identity
+Cache Store / Restore
+临时文件 + Rename 原子提交
+Size / Content Hash 完整性校验
+Cache Corruption 自动失效
+Incremental Rebuild
+修改显式源文件时，只重建受影响 Compile Edge 及下游 Link
+修改 Header 时，通过 depfile / DepsLog 找到动态依赖并生成最小受影响 BuildPlan
+编译命令变化时，通过 BuildLog 中保存的 Command Hash 使旧产物失效
+--explain 验证直接 Dirty Reason 与下游 Dirty Propagation
+
+其中增量回归测试均在独立临时目录中执行真实的 Compile / Link 流程，避免依赖开发目录中的历史构建产物。
 
 ---
 
