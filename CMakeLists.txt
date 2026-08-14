@@ -407,6 +407,15 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}"
     )
 
+    add_test(
+        NAME incremental_command
+        COMMAND
+            bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/incremental_command_test.sh"
+            "$<TARGET_FILE:forge>"
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
     set_tests_properties(
         scheduler_guard
         scheduler_multi_output
@@ -421,6 +430,7 @@ if(BUILD_TESTING)
     set_tests_properties(
         incremental_source
         incremental_header
+        incremental_command
         PROPERTIES
             TIMEOUT 15
     )
