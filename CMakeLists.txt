@@ -389,6 +389,24 @@ if(BUILD_TESTING)
         COMMAND compiler_identity_demo
     )
 
+    add_test(
+        NAME incremental_source
+        COMMAND
+            bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/incremental_source_test.sh"
+            "$<TARGET_FILE:forge>"
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
+    add_test(
+        NAME incremental_header
+        COMMAND
+            bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/incremental_header_test.sh"
+            "$<TARGET_FILE:forge>"
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
     set_tests_properties(
         scheduler_guard
         scheduler_multi_output
@@ -398,6 +416,13 @@ if(BUILD_TESTING)
         compiler_identity
         PROPERTIES
             TIMEOUT 5
+    )
+
+    set_tests_properties(
+        incremental_source
+        incremental_header
+        PROPERTIES
+            TIMEOUT 15
     )
 
 endif()
