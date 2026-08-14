@@ -19,14 +19,6 @@ public:
         const std::vector<Edge*>& edges
     );
 
-
-private:
-
-    bool depends(
-        Edge* a,
-        Edge* b
-    );
-
 };
 
 

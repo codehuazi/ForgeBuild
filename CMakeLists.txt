@@ -340,6 +340,17 @@ add_executable(
 )
 
 add_executable(
+    build_planner_multi_output_demo
+    tests/build_planner_multi_output_demo.cpp
+)
+
+target_link_libraries(
+    build_planner_multi_output_demo
+    PRIVATE
+        forge_core
+)
+
+add_executable(
     local_cache_demo
     tests/local_cache_demo.cpp
 )
@@ -367,6 +378,11 @@ if(BUILD_TESTING)
     add_test(
         NAME scheduler_multi_output
         COMMAND scheduler_multi_output_demo
+    )
+
+    add_test(
+        NAME build_planner_multi_output
+        COMMAND build_planner_multi_output_demo
     )
 
     add_test(
@@ -420,6 +436,7 @@ if(BUILD_TESTING)
         scheduler_guard
         scheduler_multi_output
         scheduler_failure
+        build_planner_multi_output
         hash
         local_cache
         compiler_identity
