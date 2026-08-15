@@ -20,7 +20,8 @@ Rule* Edge::rule() const
 
 bool Edge::needs_build() const
 {
-    for (const auto* output : outputs_)
+    for (const auto* output :
+         outputs_)
     {
         if (!output->exists())
         {
@@ -28,16 +29,27 @@ bool Edge::needs_build() const
         }
     }
 
-    for (const auto* input : inputs_)
+
+    for (const auto* input :
+         inputs_)
     {
-        for (const auto* output : outputs_)
+        if (!input->exists())
         {
-            if (input->timestamp() > output->timestamp())
+            return true;
+        }
+
+
+        for (const auto* output :
+             outputs_)
+        {
+            if (input->timestamp()
+                > output->timestamp())
             {
                 return true;
             }
         }
     }
+
 
     return false;
 }

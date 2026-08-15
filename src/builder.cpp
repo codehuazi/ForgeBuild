@@ -149,9 +149,41 @@ void Builder::append_file_state_reasons(
     for (const Node* input :
          edge->inputs())
     {
+        /*
+         * 显式输入不存在和“输入时间戳较旧”
+         * 是完全不同的状态。
+         *
+         * 输入已经不存在时，不能再依赖 timestamp
+         * 判断是否需要重建。
+         */
+        if (!input->exists())
+        {
+            reasons.push_back(
+                "input missing: "
+                + input->path()
+            );
+
+            continue;
+        }
+
+
         for (const Node* output :
              edge->outputs())
         {
+            /*
+             * Output 已经缺失时，上面已经记录了
+             * "output missing"。
+             *
+             * 此时没有必要再追加
+             * "input newer than output"，避免 --explain
+             * 输出重复、无意义的原因。
+             */
+            if (!output->exists())
+            {
+                continue;
+            }
+
+
             if (input->timestamp()
                 > output->timestamp())
             {

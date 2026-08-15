@@ -444,6 +444,23 @@ if(BUILD_TESTING)
     )
 
     add_test(
+        NAME incremental_missing_input
+        COMMAND
+            bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/incremental_missing_input_test.sh"
+            "$<TARGET_FILE:forge>"
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
+    add_test(
+        NAME missing_output
+        COMMAND
+            bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/missing_output_test.sh"
+            "$<TARGET_FILE:forge>"
+    )
+
+    add_test(
         NAME log_atomicity
         COMMAND log_atomicity_demo
     )
@@ -474,6 +491,8 @@ if(BUILD_TESTING)
         incremental_source
         incremental_header
         incremental_command
+        incremental_missing_input
+        missing_output
         interrupted_state
         PROPERTIES
             TIMEOUT 15

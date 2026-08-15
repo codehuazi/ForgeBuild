@@ -308,6 +308,37 @@ bool Executor::execute_edge(
     }
 
 
+    /*
+     * 命令退出码为 0 只说明进程本身报告成功，
+     * 不代表这个 Build Edge 已经满足构建契约。
+     *
+     * 一个 Edge 只有在所有声明 Output 都真实产生后，
+     * 才能被认为执行成功。
+     */
+    for(auto* output :
+        edge->outputs())
+    {
+        output->refresh();
+
+
+        if(!output->exists())
+        {
+            std::lock_guard<std::mutex> lock(
+                output_mutex_
+            );
+
+
+            std::cerr
+                << "declared output missing after successful command: "
+                << output->path()
+                << "\n";
+
+
+            return false;
+        }
+    }
+
+
     //
     // 编译成功后读取新的 depfile。
     //
@@ -354,7 +385,6 @@ bool Executor::execute_edge(
     for(auto* output :
         edge->outputs())
     {
-        output->refresh();
 
         output->mark_clean();
 
