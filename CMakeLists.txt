@@ -30,6 +30,7 @@ add_library(
         src/parser.cpp
         src/builder.cpp
         src/build_planner.cpp
+        src/process_runner.cpp
         src/executor.cpp
         src/file_system.cpp
         src/hash.cpp
@@ -392,6 +393,18 @@ target_link_libraries(
         forge_core
 )
 
+add_executable(
+    process_runner_demo
+    tests/process_runner_demo.cpp
+)
+
+
+target_link_libraries(
+    process_runner_demo
+    PRIVATE
+        forge_core
+)
+
 if(BUILD_TESTING)
     add_test(
         NAME scheduler_guard
@@ -524,6 +537,11 @@ if(BUILD_TESTING)
             "$<TARGET_FILE:forge>"
     )
 
+    add_test(
+        NAME process_runner
+        COMMAND process_runner_demo
+    )
+
 
     set_tests_properties(
         scheduler_guard
@@ -537,6 +555,7 @@ if(BUILD_TESTING)
         persisted_state_format
         cycle_detection
         parser_error
+        process_runner
         PROPERTIES
             TIMEOUT 5
     )

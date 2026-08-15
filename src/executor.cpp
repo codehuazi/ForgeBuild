@@ -11,7 +11,6 @@
 #include "forge/local_cache.hpp"
 
 #include <cstdint>
-#include <cstdlib>
 #include <iostream>
 #include <string>
 
@@ -285,13 +284,13 @@ bool Executor::execute_edge(
     }
 
 
-    const int result =
-        std::system(
-            command.c_str()
+    const ProcessResult process_result =
+        process_runner_.run(
+            command
         );
 
 
-    if(result != 0)
+    if(!process_result.spawned)
     {
         std::lock_guard<std::mutex> lock(
             output_mutex_
@@ -299,7 +298,78 @@ bool Executor::execute_edge(
 
 
         std::cerr
-            << "command failed: "
+            << "failed to start command process"
+            << " (error "
+            << process_result.error_number
+            << "): "
+            << command
+            << "\n";
+
+
+        return false;
+    }
+
+
+    if(process_result.signaled)
+    {
+        std::lock_guard<std::mutex> lock(
+            output_mutex_
+        );
+
+
+        std::cerr
+            << "command terminated by signal "
+            << process_result.signal_number
+            << ": "
+            << command
+            << "\n";
+
+
+        return false;
+    }
+
+
+    if(!process_result.exited)
+    {
+        std::lock_guard<std::mutex> lock(
+            output_mutex_
+        );
+
+
+        if(process_result.error_number != 0)
+        {
+            std::cerr
+                << "failed to wait for command process"
+                << " (error "
+                << process_result.error_number
+                << "): "
+                << command
+                << "\n";
+        }
+        else
+        {
+            std::cerr
+                << "command ended with unknown process status: "
+                << command
+                << "\n";
+        }
+
+
+        return false;
+    }
+
+
+    if(process_result.exit_code != 0)
+    {
+        std::lock_guard<std::mutex> lock(
+            output_mutex_
+        );
+
+
+        std::cerr
+            << "command failed with exit code "
+            << process_result.exit_code
+            << ": "
             << command
             << "\n";
 

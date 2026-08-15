@@ -1,6 +1,7 @@
 #pragma once
 
 #include "forge/compiler_identity.hpp"
+#include "forge/process_runner.hpp"
 
 #include <mutex>
 
@@ -81,6 +82,8 @@ private:
     // 避免对同一编译器重复解析路径和计算文件 Hash。
     //
     CompilerIdentityCache compiler_identity_cache_;
+
+    ProcessRunner process_runner_;
 };
 
 }
