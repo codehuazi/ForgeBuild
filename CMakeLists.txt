@@ -379,6 +379,18 @@ target_link_libraries(
         forge_core
 )
 
+add_executable(
+    persisted_state_format_demo
+    tests/persisted_state_format_demo.cpp
+)
+
+
+target_link_libraries(
+    persisted_state_format_demo
+    PRIVATE
+        forge_core
+)
+
 if(BUILD_TESTING)
 
     add_test(
@@ -465,6 +477,21 @@ if(BUILD_TESTING)
         COMMAND log_atomicity_demo
     )
 
+        add_test(
+        NAME persisted_state_format
+        COMMAND persisted_state_format_demo
+    )
+
+
+    add_test(
+        NAME corrupted_persisted_state
+        COMMAND
+            bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/corrupted_persisted_state_test.sh"
+            "$<TARGET_FILE:forge>"
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
     add_test(
         NAME interrupted_state
         COMMAND
@@ -483,19 +510,23 @@ if(BUILD_TESTING)
         local_cache
         compiler_identity
         log_atomicity
+        persisted_state_format
         PROPERTIES
             TIMEOUT 5
     )
 
     set_tests_properties(
-        incremental_source
-        incremental_header
-        incremental_command
-        incremental_missing_input
-        missing_output
-        interrupted_state
+        scheduler_guard
+        scheduler_multi_output
+        scheduler_failure
+        build_planner_multi_output
+        hash
+        local_cache
+        compiler_identity
+        log_atomicity
+        persisted_state_format
         PROPERTIES
-            TIMEOUT 15
+            TIMEOUT 5
     )
 
 endif()

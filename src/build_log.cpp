@@ -2,12 +2,23 @@
 
 #include "forge/file_system.hpp"
 
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <utility>
 
 namespace forge
 {
+
+namespace
+{
+
+
+constexpr const char* build_log_header =
+    "FORGEBUILD_BUILD_LOG_V1";
+
+
+}
 
 void BuildLog::record(
     const std::string& output_path,
@@ -90,6 +101,18 @@ bool BuildLog::command_matches(
         == current_hash;
 }
 
+
+void BuildLog::clear()
+{
+    std::lock_guard<std::mutex> lock(
+        mutex_
+    );
+
+
+    entries_.clear();
+}
+
+
 bool BuildLog::save(
     const std::string& file_path
 ) const
@@ -112,6 +135,11 @@ bool BuildLog::save(
 
 
     std::ostringstream output;
+
+
+    output
+        << build_log_header
+        << '\n';
 
 
     for(const auto& entry :
@@ -137,15 +165,60 @@ bool BuildLog::save(
     );
 }
 
-bool BuildLog::load(
+LogLoadResult BuildLog::load(
     const std::string& file_path
 )
 {
-    std::ifstream input(file_path);
+    std::error_code exists_error;
 
-    if (!input)
+
+    const bool file_exists =
+        std::filesystem::exists(
+            file_path,
+            exists_error
+        );
+
+
+    if(exists_error)
     {
-        return true;
+        return LogLoadResult::IoError;
+    }
+
+
+    if(!file_exists)
+    {
+        return LogLoadResult::Missing;
+    }
+
+
+    std::ifstream input(
+        file_path,
+        std::ios::binary
+    );
+
+
+    if(!input)
+    {
+        return LogLoadResult::IoError;
+    }
+
+
+    std::string header;
+
+
+    if(!std::getline(
+            input,
+            header
+        ))
+    {
+        return LogLoadResult::Corrupted;
+    }
+
+
+    if(header != build_log_header)
+    {
+        return LogLoadResult::
+            UnsupportedVersion;
     }
 
 
@@ -157,34 +230,46 @@ bool BuildLog::load(
 
     std::string line;
 
-    while (std::getline(input, line))
+
+    while(std::getline(
+        input,
+        line
+    ))
     {
-        if (line.empty())
+        if(line.empty())
         {
-            continue;
+            return LogLoadResult::Corrupted;
         }
 
 
         const std::size_t separator =
             line.find('\t');
 
-        if (separator == std::string::npos)
+
+        if(separator
+            == std::string::npos)
         {
-            return false;
+            return LogLoadResult::Corrupted;
         }
 
 
         const std::string output_path =
-            line.substr(0, separator);
+            line.substr(
+                0,
+                separator
+            );
+
 
         const std::string hash_text =
-            line.substr(separator + 1);
+            line.substr(
+                separator + 1
+            );
 
 
-        if (output_path.empty()
+        if(output_path.empty()
             || hash_text.empty())
         {
-            return false;
+            return LogLoadResult::Corrupted;
         }
 
 
@@ -192,25 +277,57 @@ bool BuildLog::load(
             hash_text
         );
 
+
         std::uint64_t hash = 0;
+
 
         hash_stream >> hash;
 
 
-        if (!hash_stream)
+        if(!hash_stream)
         {
-            return false;
+            return LogLoadResult::Corrupted;
         }
 
 
-        loaded_entries[output_path] =
-            hash;
+        /*
+         * 不能只判断数字前半段是否能解析。
+         *
+         * 例如：
+         *
+         *   123abc
+         *
+         * operator>> 仍然可能成功读出 123。
+         *
+         * 所以这里继续吃掉尾部空白，并要求流必须
+         * 真正到达结尾。
+         */
+        hash_stream >> std::ws;
+
+
+        if(!hash_stream.eof())
+        {
+            return LogLoadResult::Corrupted;
+        }
+
+
+        if(!loaded_entries.emplace(
+                output_path,
+                hash
+            ).second)
+        {
+            /*
+             * 同一个 Output 在 BuildLog 中出现两次，
+             * 说明持久化文件自身不一致。
+             */
+            return LogLoadResult::Corrupted;
+        }
     }
 
 
-    if (!input.eof())
+    if(!input.eof())
     {
-        return false;
+        return LogLoadResult::IoError;
     }
 
 
@@ -227,7 +344,7 @@ bool BuildLog::load(
     }
 
 
-    return true;
+    return LogLoadResult::Ok;
 }
 
 }

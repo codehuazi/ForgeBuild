@@ -54,7 +54,10 @@ int main()
     forge::DepsLog loaded_deps;
 
 
-    if (!loaded_deps.load(log_path))
+    if(loaded_deps.load(
+            log_path
+        )
+        != forge::LogLoadResult::Ok)
     {
         std::cerr
             << "failed to load deps log\n";

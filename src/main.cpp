@@ -299,13 +299,61 @@ int main(
     }
     else
     {
-        build_log.load(
-            build_log_path
-        );
+        const forge::LogLoadResult
+            build_log_result =
+                build_log.load(
+                    build_log_path
+                );
 
-        deps_log.load(
-            deps_log_path
-        );
+
+        const forge::LogLoadResult
+            deps_log_result =
+                deps_log.load(
+                    deps_log_path
+                );
+
+
+        const bool both_loaded =
+            build_log_result
+                == forge::LogLoadResult::Ok
+            && deps_log_result
+                == forge::LogLoadResult::Ok;
+
+
+        const bool fresh_build =
+            build_log_result
+                == forge::LogLoadResult::Missing
+            && deps_log_result
+                == forge::LogLoadResult::Missing;
+
+
+        if(!both_loaded)
+        {
+            /*
+             * BuildLog 和 DepsLog 共同描述上一轮构建状态。
+             *
+             * 只要其中任意一部分不可信，就不能继续使用
+             * 另一部分做增量判断。
+             */
+            build_log.clear();
+            deps_log.clear();
+
+
+            if(!fresh_build)
+            {
+                std::cout
+                    << "recovery: persisted state is not trustworthy; "
+                    << "build_log="
+                    << forge::log_load_result_name(
+                        build_log_result
+                    )
+                    << ", deps_log="
+                    << forge::log_load_result_name(
+                        deps_log_result
+                    )
+                    << "; ignoring persisted logs\n";
+            }
+        }
     }
 
 

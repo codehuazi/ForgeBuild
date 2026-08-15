@@ -120,7 +120,10 @@ int main()
 
     // 从磁盘恢复记录。
     assert(
-        loaded_log.load(log_path)
+        loaded_log.load(
+            log_path
+        )
+        == forge::LogLoadResult::Ok
     );
 
     assert(

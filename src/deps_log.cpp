@@ -2,13 +2,24 @@
 
 #include "forge/file_system.hpp"
 
+#include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <utility>
 
 
 namespace forge
 {
 
+namespace
+{
+
+
+constexpr const char* deps_log_header =
+    "FORGEBUILD_DEPS_LOG_V1";
+
+
+}
 
 void DepsLog::record(
     const std::string& output,
@@ -24,6 +35,15 @@ void DepsLog::record(
         inputs;
 }
 
+void DepsLog::clear()
+{
+    std::lock_guard<std::mutex> lock(
+        mutex_
+    );
+
+
+    entries_.clear();
+}
 
 bool DepsLog::save(
     const std::string& file_path
@@ -49,12 +69,18 @@ bool DepsLog::save(
     std::ostringstream output_file;
 
 
+    output_file
+        << deps_log_header
+        << '\n';
+
+
     for(const auto& [output, inputs] :
         snapshot)
     {
         output_file
             << output
             << '\n';
+
 
         output_file
             << inputs.size()
@@ -84,18 +110,60 @@ bool DepsLog::save(
 }
 
 
-bool DepsLog::load(
+LogLoadResult DepsLog::load(
     const std::string& file_path
 )
 {
+    std::error_code exists_error;
+
+
+    const bool file_exists =
+        std::filesystem::exists(
+            file_path,
+            exists_error
+        );
+
+
+    if(exists_error)
+    {
+        return LogLoadResult::IoError;
+    }
+
+
+    if(!file_exists)
+    {
+        return LogLoadResult::Missing;
+    }
+
+
     std::ifstream input_file(
-        file_path
+        file_path,
+        std::ios::binary
     );
 
 
-    if (!input_file)
+    if(!input_file)
     {
-        return false;
+        return LogLoadResult::IoError;
+    }
+
+
+    std::string header;
+
+
+    if(!std::getline(
+            input_file,
+            header
+        ))
+    {
+        return LogLoadResult::Corrupted;
+    }
+
+
+    if(header != deps_log_header)
+    {
+        return LogLoadResult::
+            UnsupportedVersion;
     }
 
 
@@ -108,58 +176,103 @@ bool DepsLog::load(
     std::string output_path;
 
 
-    while (std::getline(
+    while(std::getline(
         input_file,
         output_path
     ))
     {
-        std::size_t input_count = 0;
-
-
-        if (!(input_file >> input_count))
+        if(output_path.empty())
         {
-            return false;
+            return LogLoadResult::Corrupted;
         }
 
 
-        /*
-         * operator>> 读取数字后，
-         * 换行符仍然留在输入流中。
-         *
-         * ignore() 用来丢弃这个换行符，
-         * 否则下一次 getline() 会读到空字符串。
-         */
-        input_file.ignore();
+        std::string count_text;
+
+
+        if(!std::getline(
+                input_file,
+                count_text
+            ))
+        {
+            return LogLoadResult::Corrupted;
+        }
+
+
+        std::istringstream count_stream(
+            count_text
+        );
+
+
+        std::size_t input_count = 0;
+
+
+        count_stream >> input_count;
+
+
+        if(!count_stream)
+        {
+            return LogLoadResult::Corrupted;
+        }
+
+
+        count_stream >> std::ws;
+
+
+        if(!count_stream.eof())
+        {
+            return LogLoadResult::Corrupted;
+        }
 
 
         std::vector<std::string> inputs;
 
 
-        for (std::size_t i = 0;
-             i < input_count;
-             ++i)
+        for(std::size_t i = 0;
+            i < input_count;
+            ++i)
         {
             std::string input_path;
 
 
-            if (!std::getline(
+            if(!std::getline(
                     input_file,
                     input_path
                 ))
             {
-                return false;
+                return LogLoadResult::Corrupted;
+            }
+
+
+            if(input_path.empty())
+            {
+                return LogLoadResult::Corrupted;
             }
 
 
             inputs.push_back(
-                std::move(input_path)
+                std::move(
+                    input_path
+                )
             );
         }
 
 
-        loaded_entries[
-            std::move(output_path)
-        ] = std::move(inputs);
+        if(!loaded_entries.emplace(
+                output_path,
+                std::move(
+                    inputs
+                )
+            ).second)
+        {
+            return LogLoadResult::Corrupted;
+        }
+    }
+
+
+    if(!input_file.eof())
+    {
+        return LogLoadResult::IoError;
     }
 
 
@@ -170,10 +283,13 @@ bool DepsLog::load(
 
 
         entries_ =
-            std::move(loaded_entries);
+            std::move(
+                loaded_entries
+            );
     }
 
-    return true;
+
+    return LogLoadResult::Ok;
 }
 
 

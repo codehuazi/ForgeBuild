@@ -263,9 +263,10 @@ int main()
     forge::DepsLog loaded_deps_log;
 
 
-    if (!loaded_build_log.load(
+    if(loaded_build_log.load(
             build_log_path
-        ))
+        )
+        != forge::LogLoadResult::Ok)
     {
         std::cerr
             << "failed to load build log\n";
@@ -274,9 +275,10 @@ int main()
     }
 
 
-    if (!loaded_deps_log.load(
+    if(loaded_deps_log.load(
             deps_log_path
-        ))
+        )
+        != forge::LogLoadResult::Ok)
     {
         std::cerr
             << "failed to load deps log\n";

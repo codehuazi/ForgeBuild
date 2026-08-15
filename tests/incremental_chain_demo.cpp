@@ -113,12 +113,23 @@ int main()
     forge::BuildLog build_log;
 
 
-    if (!build_log.load(
+    const forge::LogLoadResult load_result =
+        build_log.load(
             build_log_path
-        ))
+        );
+
+
+    if(load_result
+            != forge::LogLoadResult::Ok
+        && load_result
+            != forge::LogLoadResult::Missing)
     {
         std::cerr
-            << "failed to load build log\n";
+            << "failed to load build log: "
+            << forge::log_load_result_name(
+                load_result
+            )
+            << '\n';
 
         return 1;
     }

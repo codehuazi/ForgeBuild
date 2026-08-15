@@ -1,5 +1,7 @@
 #pragma once
 
+#include "forge/log_load_result.hpp"
+
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -9,30 +11,40 @@
 namespace forge
 {
 
+
 class BuildLog
 {
 public:
+
     void record(
         const std::string& output_path,
         std::uint64_t command_hash
     );
 
+
     bool contains(
         const std::string& output_path
     ) const;
 
+
     std::uint64_t command_hash(
         const std::string& output_path
     ) const;
+
 
     bool command_matches(
         const std::string& output_path,
         std::uint64_t current_hash
     ) const;
 
-    bool load(
+
+    void clear();
+
+
+    LogLoadResult load(
         const std::string& file_path
     );
+
 
     bool save(
         const std::string& file_path
@@ -41,10 +53,6 @@ public:
 
 private:
 
-    //
-    // const 成员函数也需要保护 entries_，
-    // 因此 mutex_ 声明为 mutable。
-    //
     mutable std::mutex mutex_;
 
 
@@ -53,5 +61,6 @@ private:
         std::uint64_t
     > entries_;
 };
+
 
 }

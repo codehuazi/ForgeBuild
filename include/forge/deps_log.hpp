@@ -1,9 +1,11 @@
 #pragma once
 
+#include "forge/log_load_result.hpp"
+
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <mutex>
 
 
 namespace forge
@@ -21,12 +23,15 @@ public:
     );
 
 
+    void clear();
+
+
     bool save(
         const std::string& file_path
     ) const;
 
 
-    bool load(
+    LogLoadResult load(
         const std::string& file_path
     );
 
@@ -45,12 +50,11 @@ private:
 
     mutable std::mutex mutex_;
 
+
     std::unordered_map<
         std::string,
         std::vector<std::string>
     > entries_;
-
-
 };
 
 
