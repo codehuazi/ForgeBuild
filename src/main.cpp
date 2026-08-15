@@ -8,9 +8,11 @@
 #include "forge/scheduler.hpp"
 #include "forge/local_cache.hpp"
 #include "forge/edge.hpp"
+#include "forge/file_system.hpp"
 
 #include <iostream>
 #include <string>
+#include <filesystem>
 
 
 namespace
@@ -231,6 +233,9 @@ int main(
     const std::string deps_log_path =
         ".forge_deps";
 
+    const std::string state_marker_path =
+        ".forge_in_progress";
+
 
 
     std::cout
@@ -280,14 +285,28 @@ int main(
     forge::DepsLog deps_log;
 
 
-    build_log.load(
-        build_log_path
-    );
+    const bool recovering =
+        forge::FileSystem::exists(
+            state_marker_path
+        );
 
 
-    deps_log.load(
-        deps_log_path
-    );
+    if(recovering)
+    {
+        std::cout
+            << "recovery: previous build state was not committed; "
+            << "ignoring persisted logs\n";
+    }
+    else
+    {
+        build_log.load(
+            build_log_path
+        );
+
+        deps_log.load(
+            deps_log_path
+        );
+    }
 
 
     /*
@@ -371,6 +390,16 @@ int main(
         &executor
     );
 
+    if(!forge::FileSystem::atomic_write_file(
+            state_marker_path,
+            "build state in progress\n"
+        ))
+    {
+        std::cerr
+            << "failed to create build state marker\n";
+
+        return 1;
+    }
 
     if (!scheduler.run(
             plan.edges()
@@ -384,13 +413,37 @@ int main(
 
 
     /*
-     * 第五阶段：
-     * 只有构建成功后才保存状态。
-     *
-     * 如果中途失败，不应覆盖上一份可靠日志。
-     */
+    * 第五阶段：
+    *
+    * 构建成功后提交新的持久化状态。
+    *
+    * 提交顺序：
+    *
+    *   DepsLog
+    *      ↓
+    *   BuildLog
+    *      ↓
+    *   remove state marker
+    *
+    * marker 只有在两个日志都成功提交后才删除。
+    *
+    * 如果其中任何一步失败或进程异常退出，
+    * marker 会保留下来，下一次启动将忽略旧日志并
+    * 进行保守重建。
+    */
 
-    if (!build_log.save(
+    if(!deps_log.save(
+            deps_log_path
+        ))
+    {
+        std::cerr
+            << "failed to save deps log\n";
+
+        return 1;
+    }
+
+
+    if(!build_log.save(
             build_log_path
         ))
     {
@@ -401,12 +454,19 @@ int main(
     }
 
 
-    if (!deps_log.save(
-            deps_log_path
-        ))
+    std::error_code marker_error;
+
+
+    std::filesystem::remove(
+        state_marker_path,
+        marker_error
+    );
+
+
+    if(marker_error)
     {
         std::cerr
-            << "failed to save deps log\n";
+            << "failed to commit build state marker\n";
 
         return 1;
     }

@@ -1,5 +1,7 @@
 #include "forge/build_log.hpp"
 
+#include "forge/file_system.hpp"
+
 #include <fstream>
 #include <sstream>
 #include <utility>
@@ -109,15 +111,7 @@ bool BuildLog::save(
     }
 
 
-    std::ofstream output(
-        file_path
-    );
-
-
-    if(!output)
-    {
-        return false;
-    }
+    std::ostringstream output;
 
 
     for(const auto& entry :
@@ -131,8 +125,15 @@ bool BuildLog::save(
     }
 
 
-    return static_cast<bool>(
-        output
+    if(!output)
+    {
+        return false;
+    }
+
+
+    return FileSystem::atomic_write_file(
+        file_path,
+        output.str()
     );
 }
 

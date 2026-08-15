@@ -368,6 +368,17 @@ target_link_libraries(
         forge_core
 )
 
+add_executable(
+    log_atomicity_demo
+    tests/log_atomicity_demo.cpp
+)
+
+target_link_libraries(
+    log_atomicity_demo
+    PRIVATE
+        forge_core
+)
+
 if(BUILD_TESTING)
 
     add_test(
@@ -432,6 +443,20 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}"
     )
 
+    add_test(
+        NAME log_atomicity
+        COMMAND log_atomicity_demo
+    )
+
+    add_test(
+        NAME interrupted_state
+        COMMAND
+            bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/interrupted_state_test.sh"
+            "$<TARGET_FILE:forge>"
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
     set_tests_properties(
         scheduler_guard
         scheduler_multi_output
@@ -440,6 +465,7 @@ if(BUILD_TESTING)
         hash
         local_cache
         compiler_identity
+        log_atomicity
         PROPERTIES
             TIMEOUT 5
     )
@@ -448,6 +474,7 @@ if(BUILD_TESTING)
         incremental_source
         incremental_header
         incremental_command
+        interrupted_state
         PROPERTIES
             TIMEOUT 15
     )

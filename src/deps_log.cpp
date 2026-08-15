@@ -1,6 +1,9 @@
 #include "forge/deps_log.hpp"
 
+#include "forge/file_system.hpp"
+
 #include <fstream>
+#include <sstream>
 
 
 namespace forge
@@ -43,32 +46,23 @@ bool DepsLog::save(
     }
 
 
-    std::ofstream output_file(
-        file_path
-    );
+    std::ostringstream output_file;
 
 
-    if (!output_file)
-    {
-        return false;
-    }
-
-
-    for (const auto& [output, inputs] :
-         snapshot)
+    for(const auto& [output, inputs] :
+        snapshot)
     {
         output_file
             << output
             << '\n';
-
 
         output_file
             << inputs.size()
             << '\n';
 
 
-        for (const std::string& input :
-             inputs)
+        for(const std::string& input :
+            inputs)
         {
             output_file
                 << input
@@ -77,7 +71,16 @@ bool DepsLog::save(
     }
 
 
-    return true;
+    if(!output_file)
+    {
+        return false;
+    }
+
+
+    return FileSystem::atomic_write_file(
+        file_path,
+        output_file.str()
+    );
 }
 
 
