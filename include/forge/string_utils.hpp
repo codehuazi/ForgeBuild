@@ -20,6 +20,10 @@ std::vector<std::string> split(
     char delimiter
 );
 
+std::vector<std::string> split(
+    const std::string& str
+);
+
 void replace_all(
     std::string& str,
     const std::string& from,

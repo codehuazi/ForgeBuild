@@ -1,5 +1,6 @@
 #include "forge/build_log.hpp"
 #include "forge/build_plan.hpp"
+#include "forge/build_graph_validator.hpp"
 #include "forge/builder.hpp"
 #include "forge/deps_log.hpp"
 #include "forge/executor.hpp"
@@ -13,6 +14,7 @@
 #include <iostream>
 #include <string>
 #include <filesystem>
+#include <exception>
 
 
 namespace
@@ -258,15 +260,37 @@ int main(
     forge::Parser parser;
 
 
-    if (!parser.parse_file(
+    if(!parser.parse_file(
             manifest_path,
             manifest
         ))
     {
         std::cerr
-            << "failed to parse manifest: "
-            << manifest_path
+            << parser.error()
             << '\n';
+
+
+        return 1;
+    }
+
+    forge::BuildGraphValidator
+        graph_validator;
+
+
+    try
+    {
+        graph_validator.validate(
+            manifest.graph()
+        );
+    }
+    catch(const std::exception& exception)
+    {
+        std::cerr
+            << manifest_path
+            << ": invalid build graph: "
+            << exception.what()
+            << '\n';
+
 
         return 1;
     }

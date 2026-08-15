@@ -23,6 +23,7 @@ add_library(
         src/node.cpp
         src/edge.cpp
         src/build_graph.cpp
+        src/build_graph_validator.cpp
         src/build_plan.cpp
         src/manifest.cpp
         src/string_utils.cpp
@@ -392,7 +393,6 @@ target_link_libraries(
 )
 
 if(BUILD_TESTING)
-
     add_test(
         NAME scheduler_guard
         COMMAND scheduler_guard_demo
@@ -477,11 +477,10 @@ if(BUILD_TESTING)
         COMMAND log_atomicity_demo
     )
 
-        add_test(
+    add_test(
         NAME persisted_state_format
         COMMAND persisted_state_format_demo
     )
-
 
     add_test(
         NAME corrupted_persisted_state
@@ -501,32 +500,58 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}"
     )
 
+    add_test(
+        NAME manifest_multi_output
+        COMMAND
+            bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/manifest_multi_output_test.sh"
+            "$<TARGET_FILE:forge>"
+    )
+
+    add_test(
+        NAME cycle_detection
+        COMMAND
+            bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cycle_detection_test.sh"
+            "$<TARGET_FILE:forge>"
+    )
+
+    add_test(
+        NAME parser_error
+        COMMAND
+            bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/parser_error_test.sh"
+            "$<TARGET_FILE:forge>"
+    )
+
+
     set_tests_properties(
         scheduler_guard
         scheduler_multi_output
-        scheduler_failure
         build_planner_multi_output
+        scheduler_failure
         hash
         local_cache
         compiler_identity
         log_atomicity
         persisted_state_format
+        cycle_detection
+        parser_error
         PROPERTIES
             TIMEOUT 5
     )
+
 
     set_tests_properties(
-        scheduler_guard
-        scheduler_multi_output
-        scheduler_failure
-        build_planner_multi_output
-        hash
-        local_cache
-        compiler_identity
-        log_atomicity
-        persisted_state_format
+        incremental_source
+        incremental_header
+        incremental_command
+        incremental_missing_input
+        missing_output
+        corrupted_persisted_state
+        interrupted_state
+        manifest_multi_output
         PROPERTIES
-            TIMEOUT 5
+            TIMEOUT 15
     )
-
 endif()
