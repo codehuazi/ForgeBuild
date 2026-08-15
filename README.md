@@ -2,59 +2,231 @@
 
 [![CI](https://github.com/codehuazi/ForgeBuild/actions/workflows/ci.yml/badge.svg)](https://github.com/codehuazi/ForgeBuild/actions/workflows/ci.yml)
 
-ForgeBuild 是一个基于 **C++20 / Linux** 实现的增量并行构建引擎。
+**ForgeBuild** 是一个基于 **C++20 / Linux** 实现的增量并行构建引擎。
 
-项目围绕现代构建系统的核心问题展开，实现了 **依赖 DAG、最小增量重建、并行任务调度、GCC/Clang 动态头文件依赖追踪以及本地内容寻址缓存**，并通过 CTest、Sanitizer、Benchmark 和 GitHub Actions 对正确性、性能和可靠性进行验证。
+项目围绕现代构建系统的核心问题展开，实现了：
+
+* 依赖 DAG 与环检测
+* 最小增量重建
+* GCC / Clang 动态 Header 依赖追踪
+* 多线程 DAG 调度
+* 构建命令变化失效
+* 本地内容寻址缓存
+* Dirty Reason 诊断
+* CTest / Sanitizer / GitHub Actions 工程化验证
+
+## Highlights
+
+| Item                | Result                             |
+| ------------------- | ---------------------------------- |
+| Language / Platform | C++20 / Linux                      |
+| Parallel Build      | `-j N` dependency-aware scheduler  |
+| Benchmark Scale     | 32 Translation Units + 1 Link Edge |
+| Parallel Speedup    | `-j4` vs `-j1`: **3.02×**          |
+| Cache Restore       | vs `-j4` cold build: **12.35×**    |
+| Regression Tests    | **9 / 9 passed**                   |
+| CI                  | GitHub Actions                     |
+
+在 4 vCPU Ubuntu VM 的 32 Translation Unit Benchmark 中：
+
+```text
+-j1 Cold Build : 3.206 s
+-j2 Cold Build : 1.648 s
+-j4 Cold Build : 1.062 s
+Cache Restore  : 0.086 s
+```
+
+其中 `-j4` 相比 `-j1` 获得约 **3.02×** 并行加速；有效 Cache 下恢复构建结果相比 `-j4` Cold Build 获得约 **12.35×** 加速。
 
 ---
 
-## Features
+## Core Features
 
-* **Manifest 解析**
+### Incremental Build
 
-  * 支持 `rule` / `build`
-  * 支持 `$in`、`$out` 命令展开
-  * 构建 `Rule / Node / Edge / BuildGraph` 模型
+ForgeBuild 根据输入、输出以及历史构建信息判断 Edge 是否 Dirty，并只生成真正需要执行的最小 `BuildPlan`。
 
-* **依赖 DAG**
+当前覆盖的主要失效条件包括：
 
-  * 使用有向图描述构建任务依赖
-  * 支持拓扑关系分析与环检测
-  * 根据依赖关系生成可执行任务序列
+* Output 不存在
+* Input 时间戳晚于 Output
+* 动态 Header 依赖变化
+* 构建命令发生变化
+* 上游 Edge 已经 Dirty
 
-* **增量构建**
+例如：
 
-  * 基于输入 / 输出时间戳判断 Dirty 状态
-  * Dirty 状态向下游传播
-  * 只生成本次真正受影响的 `BuildPlan`
-  * 构建命令变化时自动失效
+```text
+a.cpp ----> a.o ---\
+                    \
+b.cpp ----> b.o -----+--> app
+                    /
+main.cpp -> main.o -/
+```
 
-* **动态 Header 依赖**
+仅修改 `a.cpp` 后：
 
-  * 解析 GCC / Clang `-MMD -MF` 生成的 depfile
-  * 使用 `DepsLog` 持久化 Header 依赖
-  * Header 修改或删除后自动触发相关 Translation Unit 重建
+```text
+a.cpp
+  |
+  v
+a.o
+  |
+  v
+app
+```
 
-* **并行 DAG 调度**
+只重新执行：
 
-  * 支持 `-j N`
-  * Worker Thread + Ready Queue
-  * 根据依赖完成情况动态释放下游任务
-  * 支持失败传播与 Worker 正常退出
+```text
+Compile a.cpp
+Link app
+```
 
-* **多输出 Edge**
+`b.o` 和 `main.o` 保持复用。
 
-  * 单个构建任务可以生成多个 Output
-  * 避免同一个 Edge 被重复调度执行
+### Dynamic Header Dependencies
 
-* **内容寻址本地缓存**
+Compile Rule 支持 GCC / Clang depfile：
 
-  * 基于 Command + Dependency Path + Dependency Content 构造 Cache Key
-  * 使用 64-bit FNV-1a 流式 Hash
-  * 支持 Cache Store / Restore
-  * 使用临时文件 + Rename 提交缓存对象
-  * Metadata 校验 Size / Content Hash
-  * 缓存损坏时自动失效并回退正常编译
+```text
+-MMD -MF $out.d
+```
+
+例如编译器生成：
+
+```text
+main.o: main.cpp a.hpp b.hpp
+```
+
+ForgeBuild 解析 depfile，并通过 `DepsLog` 持久化这些运行时发现的 Header 依赖。
+
+因此即使 Header 没有显式写在 Manifest 中：
+
+```text
+a.hpp changed
+      |
+      +--> a.o
+      |
+      +--> main.o
+              |
+              v
+             app
+```
+
+仍然能够找到真正受影响的 Translation Unit，而不会重新构建整个工程。
+
+### Parallel DAG Scheduler
+
+ForgeBuild 支持：
+
+```bash
+-j N
+```
+
+Scheduler 使用：
+
+```text
+Dependency DAG
+      |
+      v
+Initial Ready Edges
+      |
+      v
+  Ready Queue
+      |
+  +---+---+---+
+  |   |   |   |
+ W1  W2  W3  W4
+  |   |   |   |
+  +---+---+---+
+      |
+      v
+Release Downstream Edges
+```
+
+核心机制包括：
+
+* Worker Thread + Ready Queue
+* 根据前驱完成状态动态释放任务
+* 保证 DAG 依赖约束
+* Failure Propagation
+* Multi-Output Edge 去重
+* Worker 正常退出
+
+### Content-Addressed Local Cache
+
+当某个任务需要执行时，Executor 会先计算 Cache Key：
+
+```text
+Command
++
+Dependency Paths
++
+Dependency Contents
+        |
+        v
+     Cache Key
+```
+
+随后：
+
+```text
+Need Build
+    |
+    v
+Cache Lookup
+  /     \
+Hit     Miss
+ |        |
+ v        v
+Restore  Run Command
+           |
+           v
+        Cache Store
+```
+
+缓存实现包含：
+
+* 64-bit FNV-1a 流式 Hash
+* Cache Store / Restore
+* 临时文件 + Rename 原子提交
+* Metadata Size 校验
+* Content Hash 校验
+* Corruption Detection
+* 缓存损坏时自动失效并回退正常构建
+
+Cache 只影响性能，不影响构建正确性。
+
+### Dirty Reason
+
+使用：
+
+```bash
+./build/debug/forge --explain -j 3 build.forge
+```
+
+可以查看任务为什么进入本次 BuildPlan，例如：
+
+```text
+[dirty] a.cpp --compile--> a.o
+  input newer than output: a.cpp -> a.o
+
+[dirty] a.o + b.o + main.o --link--> app
+  upstream output is dirty: a.o
+```
+
+目前可以解释包括：
+
+```text
+output missing
+input newer than output
+dynamic dependency changed
+command changed
+upstream output is dirty
+```
+
+这使增量构建行为不仅能够执行，也能够被诊断和验证。
 
 ---
 
@@ -103,16 +275,17 @@ Parallel Scheduler
                        BuildLog
 ```
 
-核心模块职责：
+主要模块：
 
 | Module         | Responsibility                |
 | -------------- | ----------------------------- |
 | `BuildGraph`   | 管理 `Rule / Node / Edge` 及依赖关系 |
-| `Builder`      | 判断 Dirty 状态并传播影响              |
+| `Builder`      | Dirty 判断与影响传播                 |
 | `BuildPlanner` | 生成最小受影响 BuildPlan             |
 | `Scheduler`    | 根据 DAG 依赖并行调度任务               |
-| `Executor`     | 执行命令并维护日志、动态依赖和缓存             |
-| `DepsLog`      | 持久化 Header 动态依赖               |
+| `Executor`     | 执行命令并维护日志、动态依赖与缓存             |
+| `BuildLog`     | 保存历史构建信息与 Command Hash        |
+| `DepsLog`      | 持久化动态 Header 依赖               |
 | `LocalCache`   | 保存和恢复内容寻址构建结果                 |
 
 ---
@@ -122,12 +295,12 @@ Parallel Scheduler
 ### Requirements
 
 * Linux
-* C++20
+* C++20 Compiler
 * CMake
 * GCC / Clang
 * pthread
 
-### Build ForgeBuild
+### Build
 
 ```bash
 cmake \
@@ -147,19 +320,11 @@ cmake \
 build/debug/forge
 ```
 
-### Run Example
+### Example Manifest
 
-仓库根目录提供了一个简单的 C++ 示例工程：
+仓库根目录提供了一个简单 C++ 工程。
 
-```text
-a.cpp ----> a.o ---\
-                    \
-b.cpp ----> b.o -----+--> app
-                    /
-main.cpp -> main.o -/
-```
-
-对应 `build.forge`：
+`build.forge`：
 
 ```text
 rule compile
@@ -175,85 +340,26 @@ build main.o: compile main.cpp
 build app: link a.o b.o main.o
 ```
 
-使用 3 个 Worker：
+运行：
 
 ```bash
 ./build/debug/forge -j 3 build.forge
-```
-
-运行结果：
-
-```bash
 ./app
 ```
+
+程序输出：
 
 ```text
 30
 ```
 
----
-
-## Incremental Build
-
-ForgeBuild 不会简单地在每次运行时重新执行整个构建图。
-
-例如只修改：
-
-```text
-a.cpp
-```
-
-本次受影响路径为：
-
-```text
-a.cpp
-  |
-  v
-a.o
-  |
-  v
-app
-```
-
-因此只需要执行：
-
-```text
-Compile a.cpp
-+
-Link app
-```
-
-与变化无关的 `b.cpp` 不会重新编译。
-
-### Dynamic Header Dependency
-
-Compile Rule 使用：
-
-```text
--MMD -MF $out.d
-```
-
-生成：
-
-```text
-main.o: main.cpp a.hpp b.hpp
-```
-
-ForgeBuild 将这些依赖写入 `DepsLog`。
-
-因此 Header 即使没有显式写入 Manifest，修改：
-
-```text
-a.hpp
-```
-
-后仍然能够自动找到真正受影响的编译任务。
+再次执行且输入没有变化时，不会重复构建 Clean Edge。
 
 ---
 
-## Parallel Build Benchmark
+## Benchmark
 
-Benchmark 包含：
+Benchmark 工程包含：
 
 ```text
 32 C++ Translation Units
@@ -281,37 +387,25 @@ Cold Build 每组运行 5 次：
 
 ```text
 3.206 s
-   ↓
+   |
+   v
 1.062 s
 ```
 
-获得约 **3.02× Speedup**，构建耗时下降约 **66.9%**。
+约 **3.02× Speedup**，构建耗时下降约 **66.9%**。
 
-实际加速不会随 Worker 数量无限线性增长，主要受到最终串行 Link、进程创建、CPU / I/O 竞争和同步开销等因素影响。
+并行效率不会随 Worker 数量无限线性增长，主要受到：
 
----
+* 最终串行 Link
+* Process Creation
+* CPU / I/O 竞争
+* Scheduler 同步开销
 
-## Content Cache
+等因素影响。
 
-当输出文件已经不存在，但此前执行过相同的构建任务时：
+### Cache Restore
 
-```text
-Output Missing
-      |
-      v
-Edge enters BuildPlan
-      |
-      v
-Calculate Cache Key
-      |
-      v
-Cache Hit
-      |
-      v
-Restore Output
-```
-
-Benchmark 中删除全部 Output、保留有效 Cache 和 DepsLog：
+删除全部 Output，但保留有效 Cache 后：
 
 ```text
 -j4 Cold Build : 1.062 s
@@ -325,47 +419,14 @@ Average : 0.086 s
 Median  : 0.080 s
 ```
 
-相较 `-j4` Cold Build：
+相比 `-j4` Cold Build：
 
-* **约 12.35× Speedup**
-* **构建耗时下降约 91.9%**
+* **12.35× Speedup**
+* 构建耗时下降约 **91.9%**
 
-### Incremental Build vs Cache
+### Minimal Rebuild
 
-**Incremental Build**
-
-```text
-Input unchanged
-+
-Output valid
-      |
-      v
-Skip Edge
-```
-
-避免执行不必要任务。
-
-**Content Cache**
-
-```text
-Task needs execution
-      |
-      v
-Cache Hit
-      |
-      v
-Restore historical result
-```
-
-复用已经计算过的结果。
-
----
-
-## Minimal Rebuild Validation
-
-### Modify One Source
-
-修改：
+修改单个源文件：
 
 ```text
 benchmark/src/file_00.cpp
@@ -380,22 +441,14 @@ planned edge count: 2
 只执行：
 
 ```text
-file_00.cpp -> file_00.o
+1 Compile
 +
-link
+1 Link
 ```
 
-其他 31 个 Compile Edge 不重新执行。
+其他 31 个 Compile Edge 不执行。
 
-### Modify Shared Header
-
-31 个模块共同依赖：
-
-```text
-benchmark/include/common.hpp
-```
-
-修改后：
+修改被 31 个模块共同依赖的 Header 后：
 
 ```text
 planned edge count: 32
@@ -404,19 +457,12 @@ planned edge count: 32
 执行：
 
 ```text
-31 Compile Edge
+31 Compile
 +
-1 Link Edge
+1 Link
 ```
 
-不依赖该 Header 的 `main.cpp` 不会重新编译。
-
-该场景验证了：
-
-* depfile 动态依赖
-* Dirty Propagation
-* High Fan-Out Dependency
-* 最小受影响子图
+不依赖该 Header 的 Translation Unit 保持 Clean。
 
 ---
 
@@ -424,7 +470,7 @@ planned edge count: 32
 
 ### CTest
 
-核心回归测试通过 CTest 统一管理：
+运行：
 
 ```bash
 ctest \
@@ -432,11 +478,12 @@ ctest \
     --output-on-failure
 ```
 
-当前注册：
+当前共有 **12 项自动化测试**：
 
 ```text
 scheduler_guard
 scheduler_multi_output
+build_planner_multi_output
 scheduler_failure
 hash
 local_cache
@@ -444,57 +491,75 @@ compiler_identity
 incremental_source
 incremental_header
 incremental_command
+log_atomicity
+interrupted_state
 ```
 
 当前结果：
 
 ```text
-9 / 9 tests passed
+12 / 12 tests passed
 ```
 
-测试覆盖包括：
+主要覆盖以下场景。
 
-Scheduler 正确性
-非法调度状态保护
-Multi-Output Edge 去重执行
-任务失败向下游传播
-Hash / Content Cache
-增量 Hash 与 Cache Key
-Compiler Identity
-Cache Store / Restore
-临时文件 + Rename 原子提交
-Size / Content Hash 完整性校验
-Cache Corruption 自动失效
-Incremental Rebuild
-修改显式源文件时，只重建受影响 Compile Edge 及下游 Link
-修改 Header 时，通过 depfile / DepsLog 找到动态依赖并生成最小受影响 BuildPlan
-编译命令变化时，通过 BuildLog 中保存的 Command Hash 使旧产物失效
---explain 验证直接 Dirty Reason 与下游 Dirty Propagation
+### Scheduler / Build Planner
 
-其中增量回归测试均在独立临时目录中执行真实的 Compile / Link 流程，避免依赖开发目录中的历史构建产物。
+* 非法调度状态保护
+* Multi-Output Edge 去重
+* Multi-Output BuildPlan 正确性
+* Failure Propagation
+* DAG 依赖约束下的任务调度
 
----
+### Hash / Cache
+
+* Incremental Hash
+* Cache Key
+* Compiler Identity
+* Cache Store / Restore
+* Atomic Commit
+* Corruption Detection
+
+### Incremental Rebuild
+
+* Source Change
+* Dynamic Header Change
+* Command Change
+* Dirty Propagation
+* 最小受影响 BuildPlan
+* `--explain` Dirty Reason
+
+三个增量测试均在独立临时目录中执行真实 Compile / Link 流程，避免依赖开发目录中的历史构建产物。
+
+### Persistent State Reliability
+
+针对构建日志和持久化状态增加异常场景验证：
+
+* `log_atomicity`：验证日志通过临时文件写入并原子替换正式文件，避免写入过程中断导致正式日志只保存部分内容
+* `interrupted_state`：验证构建中断标记能够识别上一轮异常退出，避免下一次启动盲目信任可能不完整的构建状态
+
+通过上述机制，使 ForgeBuild 在进程异常退出或日志更新被中断时能够采取更保守的恢复策略。
 
 ### Sanitizer
 
-分别建立独立构建配置：
+项目使用：
 
 ```text
-build/sanitize
-├── AddressSanitizer
-└── UndefinedBehaviorSanitizer
-
-build/tsan
-└── ThreadSanitizer
+AddressSanitizer
+UndefinedBehaviorSanitizer
 ```
 
-主要用于检测：
+对自动化测试实际覆盖的执行路径进行内存安全与未定义行为检测。
 
-* **ASan**：非法内存访问、越界等
-* **UBSan**：Undefined Behavior
-* **TSan**：多线程 Data Race
+最新代码在 ASan + UBSan 构建配置下执行完整测试集：
 
-除 CTest 外，还使用：
+```text
+12 / 12 tests passed
+```
+
+未检测到对应的 Sanitizer 报错。
+
+此外，项目还使用 ThreadSanitizer 对并行调度场景进行过专项动态检测，并使用：
 
 ```text
 4 Scheduler Workers
@@ -502,21 +567,17 @@ build/tsan
 1 Link Edge
 ```
 
-进行端到端动态检测。
+进行并行构建场景验证。
 
-当前测试覆盖路径中未发现对应 Sanitizer 报错。
+> Sanitizer 属于动态分析，只能检查程序实际执行到的代码路径，因此该结果不等价于证明程序不存在任何 Bug。
 
-> Sanitizer 属于动态分析，因此该结果不等价于证明程序不存在任何 Bug。
-
----
-
-### GitHub Actions CI
+### GitHub Actions
 
 每次：
 
 ```text
 push
-或
+or
 pull request
 ```
 
@@ -524,23 +585,98 @@ pull request
 
 ```text
 Ubuntu 22.04
-      |
-      v
+     |
+     v
 Checkout
-      |
-      v
+     |
+     v
 CMake Configure
-      |
-      v
+     |
+     v
 Build
-      |
-      v
+     |
+     v
 CTest
 ```
 
-当前 GitHub Actions CI 已通过。
+CI 从干净 Runner 重新配置、构建并测试项目，避免本地历史构建产物、缓存或临时文件造成假成功。
 
-CI 使用干净 Runner 从源码重新配置和构建项目，避免本地旧 Build Artifact、Cache 或临时文件导致假成功。
+---
+
+## Design Decisions
+
+### Incremental Build and Cache Are Different
+
+**Incremental Build**
+
+```text
+Input unchanged
++
+Output valid
+      |
+      v
+Skip Edge
+```
+
+目标是避免执行本来就不需要执行的任务。
+
+**Content Cache**
+
+```text
+Task needs execution
+      |
+      v
+Cache Hit
+      |
+      v
+Restore Result
+```
+
+目标是复用历史上已经计算过的结果。
+
+两者解决的是不同问题。
+
+### Dependency-Aware Parallelism
+
+ForgeBuild 不会简单地把所有任务扔进线程池。
+
+只有当一个 Edge 的所有必要前驱已经完成后，它才会进入 Ready Queue。
+
+因此并行执行仍然满足 DAG 的依赖约束。
+
+### Cache Correctness First
+
+缓存是优化层：
+
+```text
+Cache Hit
+    |
+    v
+Restore
+
+Cache Miss / Corruption
+    |
+    v
+Normal Build
+```
+
+即使缓存不存在、失效或损坏，也必须能够回退到正常构建路径。
+
+### Dynamic Dependencies
+
+Manifest 描述的是静态构建关系，但 C/C++ Header 依赖往往只有编译器真正运行后才能完整获得。
+
+因此 ForgeBuild 将：
+
+```text
+Static Build Graph
++
+Compiler Depfile
++
+Persistent DepsLog
+```
+
+结合起来进行下一轮 Dirty Analysis。
 
 ---
 
@@ -548,110 +684,37 @@ CI 使用干净 Runner 从源码重新配置和构建项目，避免本地旧 Bu
 
 ```text
 ForgeBuild/
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-│
-├── include/forge/
-│   ├── build_graph.hpp
-│   ├── build_planner.hpp
-│   ├── builder.hpp
-│   ├── executor.hpp
-│   ├── scheduler.hpp
-│   ├── depfile.hpp
-│   ├── deps_log.hpp
-│   ├── hash.hpp
-│   ├── cache_key.hpp
-│   └── local_cache.hpp
-│
-├── src/
-│   ├── main.cpp
-│   ├── build_graph.cpp
-│   ├── build_planner.cpp
-│   ├── builder.cpp
-│   ├── executor.cpp
-│   ├── scheduler.cpp
-│   ├── depfile.cpp
-│   ├── deps_log.cpp
-│   ├── hash.cpp
-│   ├── cache_key.cpp
-│   └── local_cache.cpp
-│
-├── tests/
-├── benchmark/
-├── examples/
-├── docs/
-│
-├── a.cpp
-├── a.hpp
-├── b.cpp
-├── b.hpp
-├── main.cpp
-├── build.forge
-│
+├── .github/workflows/    # GitHub Actions CI
+├── benchmark/            # 32 Translation Unit benchmark
+├── examples/             # Example projects
+├── include/forge/        # Public headers
+├── src/                  # Core implementation
+├── tests/                # Automated tests
 ├── CMakeLists.txt
-├── .gitignore
 └── README.md
 ```
 
-其中：
+核心实现位于：
 
-* `src/main.cpp`：ForgeBuild 自身入口
-* 根目录 `a.cpp / b.cpp / main.cpp / build.forge`：Quick Start 示例工程
-* `benchmark/`：32 Translation Unit 性能测试工程
-* `docs/`：各阶段设计与实现笔记
+```text
+include/forge/
+src/
+```
+
+性能测试和自动化验证分别位于：
+
+```text
+benchmark/
+tests/
+```
 
 ---
 
-## Design Highlights
+## Current Scope
 
-### Minimal Rebuild
+ForgeBuild 当前定位为 **单机 Linux 增量并行构建引擎**，重点验证构建图分析、增量重建、并行任务调度、动态依赖和本地内容寻址缓存等核心机制。
 
-只重新执行真正受输入变化影响的 Edge，而不是重新构建整个工程。
-
-### Dependency-Aware Parallelism
-
-任务只有在所有必要前驱已经完成后才进入 Ready Queue，保证并行执行仍满足 DAG 依赖约束。
-
-### Cache Correctness First
-
-```text
-Cache Hit
-   |
-   v
-Restore
-
-Cache Miss / Corruption
-   |
-   v
-Normal Compile
-```
-
-Cache 只影响性能。
-
-缓存失效或损坏不能改变最终构建正确性。
-
-### Reproducible Validation
-
-项目不仅在开发目录中测试，还通过：
-
-```text
-Clean Build
-+
-CTest
-+
-Sanitizer
-+
-GitHub Actions
-```
-
-验证从干净环境重新构建和测试的能力。
-
----
-
-## Current Limitations
-
-ForgeBuild 当前定位为 **单机 Linux 构建引擎**，暂未实现：
+当前暂不实现：
 
 * Windows Support
 * Remote / Distributed Build
@@ -663,16 +726,4 @@ ForgeBuild 当前定位为 **单机 Linux 构建引擎**，暂未实现：
 * CMake Project Generation
 * 完整 Ninja Manifest 兼容
 
-这些功能暂不属于当前项目范围。
-
----
-
-## Documentation
-
-更详细的设计过程、实现思路与实验记录位于：
-
-```text
-docs/
-```
-
-其中包含从 Build Graph、Parser、Dirty Propagation，到并行 Scheduler、动态依赖、内容寻址缓存和工程化验证等阶段的完整开发笔记。
+这些功能不属于当前项目的核心目标。
