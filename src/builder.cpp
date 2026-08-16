@@ -15,6 +15,7 @@
 #include <queue>
 #include <unordered_set>
 #include <vector>
+#include <stdexcept>
 
 
 namespace forge
@@ -58,39 +59,202 @@ Builder::Builder(
 
 BuildPlan Builder::build()
 {
-    // 第一步：从磁盘刷新所有节点状态。
+    /*
+     * 没有指定 Target 时保持原有行为：
+     * 对整个 BuildGraph 做 Dirty Analysis。
+     */
+
     refresh_nodes();
 
 
-    // 第二步：找出本次需要执行的所有 Edge。
-    //
-    // 这里不仅包含：
-    // 1. 输出不存在的 Edge
-    // 2. 输入比输出新的 Edge
-    //
-    // 还会包含：
-    // 3. 因上游输出即将变化而需要执行的下游 Edge
     auto edges =
-        collect_edges_to_build();
+        collect_edges_to_build(
+            nullptr
+        );
 
 
-    // 第三步：按照依赖关系进行拓扑排序。
+    return make_plan(
+        edges
+    );
+}
+
+
+BuildPlan Builder::build(
+    const std::vector<std::string>& targets
+)
+{
+    /*
+     * 空 Target 集合等价于完整构建。
+     */
+    if(targets.empty())
+    {
+        return build();
+    }
+
+
+    /*
+     * 先计算用户真正要求的 Target
+     * 所对应的上游 Edge 闭包。
+     *
+     * 然后 Dirty Analysis 只允许在这个闭包内进行。
+     */
+    const auto target_closure =
+        collect_target_closure(
+            targets
+        );
+
+
+    refresh_nodes();
+
+
+    auto edges =
+        collect_edges_to_build(
+            &target_closure
+        );
+
+
+    return make_plan(
+        edges
+    );
+}
+
+
+BuildPlan Builder::make_plan(
+    const std::vector<Edge*>& edges
+)
+{
     BuildPlanner planner;
 
+
     auto ordered =
-        planner.plan(edges);
+        planner.plan(
+            edges
+        );
 
 
-    // 第四步：把排序后的 Edge 写入 BuildPlan。
     BuildPlan plan;
 
-    for(auto* edge : ordered)
+
+    for(auto* edge :
+        ordered)
     {
-        plan.add_edge(edge);
+        plan.add_edge(
+            edge
+        );
     }
 
 
     return plan;
+}
+
+
+std::unordered_set<Edge*>
+Builder::collect_target_closure(
+    const std::vector<std::string>& targets
+) const
+{
+    std::unordered_set<Edge*>
+        closure;
+
+
+    std::vector<Edge*>
+        pending_edges;
+
+
+    /*
+     * Target 是 BuildGraph 中的 Output Node。
+     *
+     * Node::in_edge() 指向生成这个 Node 的 Producer Edge。
+     */
+    for(const std::string& target :
+        targets)
+    {
+        const auto iterator =
+            graph_.nodes().find(
+                target
+            );
+
+
+        if(iterator
+            == graph_.nodes().end())
+        {
+            throw std::invalid_argument(
+                "unknown target: "
+                + target
+            );
+        }
+
+
+        Edge* producer =
+            iterator->second
+                ->in_edge();
+
+
+        if(producer == nullptr)
+        {
+            throw std::invalid_argument(
+                "target is not produced by any build edge: "
+                + target
+            );
+        }
+
+
+        pending_edges.push_back(
+            producer
+        );
+    }
+
+
+    /*
+     * 从 Target Producer 开始反向遍历。
+     *
+     * Edge
+     *   ↑
+     * input Node
+     *   ↑
+     * input->in_edge()
+     *
+     * 最终得到所有必须位于 Target 上游的 Producer Edge。
+     */
+    while(!pending_edges.empty())
+    {
+        Edge* edge =
+            pending_edges.back();
+
+
+        pending_edges.pop_back();
+
+
+        const bool inserted =
+            closure.insert(
+                edge
+            ).second;
+
+
+        if(!inserted)
+        {
+            continue;
+        }
+
+
+        for(Node* input :
+            edge->inputs())
+        {
+            Edge* producer =
+                input->in_edge();
+
+
+            if(producer != nullptr)
+            {
+                pending_edges.push_back(
+                    producer
+                );
+            }
+        }
+    }
+
+
+    return closure;
 }
 
 
@@ -322,7 +486,10 @@ void Builder::append_dynamic_dependency_reasons(
 }
 
 
-std::vector<Edge*> Builder::collect_edges_to_build()
+std::vector<Edge*> Builder::collect_edges_to_build(
+    const std::unordered_set<Edge*>*
+        allowed_edges
+)
 {
     std::vector<Edge*> result;
 
@@ -338,6 +505,14 @@ std::vector<Edge*> Builder::collect_edges_to_build()
     {
         Edge* edge =
             edge_owner.get();
+
+        if(allowed_edges != nullptr
+            && !allowed_edges->contains(
+                edge
+            ))
+        {
+            continue;
+        }
 
         std::vector<std::string>
             edge_reasons;
@@ -404,13 +579,30 @@ std::vector<Edge*> Builder::collect_edges_to_build()
 
 
             for (Edge* dependent_edge :
-                 output->out_edges())
+                output->out_edges())
             {
+                /*
+                * Target Build 中，只允许 Dirty 状态在
+                * 当前 Target 的上游闭包内部传播。
+                *
+                * 即使同一个 Output 还有其他下游消费者，
+                * 只要它不属于当前 Target，就不能进入 BuildPlan。
+                */
+                if(allowed_edges != nullptr
+                    && !allowed_edges->contains(
+                        dependent_edge
+                    ))
+                {
+                    continue;
+                }
+
+
                 reasons_[dependent_edge]
                     .push_back(
                         "upstream output is dirty: "
                         + output->path()
                     );
+
 
 
                 const bool inserted =

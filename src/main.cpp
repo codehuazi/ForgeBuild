@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <exception>
 #include <cerrno>
+#include <vector>
 
 
 namespace
@@ -30,13 +31,16 @@ struct CommandLineOptions
     bool explain = false;
 
     std::string manifest_path;
+
+    std::vector<std::string> targets;
 };
 
 
 void print_usage()
 {
     std::cerr
-        << "usage: forge [--explain] [-j N | -jN] <manifest-file>\n";
+        << "usage: forge [--explain] [-j N | -jN] "
+            "<manifest-file> [target ...]\n";
 }
 
 
@@ -167,17 +171,23 @@ bool parse_command_line(
         }
 
 
-        if (!options.manifest_path.empty())
+        if(options.manifest_path.empty())
         {
-            std::cerr
-                << "multiple manifest files provided\n";
-
-            return false;
+            /*
+            * 第一个普通位置参数始终是 Manifest。
+            */
+            options.manifest_path =
+                argument;
         }
-
-
-        options.manifest_path =
-            argument;
+        else
+        {
+            /*
+            * 后续普通位置参数全部解释为 Build Target。
+            */
+            options.targets.push_back(
+                argument
+            );
+        }
     }
 
 
@@ -427,8 +437,34 @@ int main(
         deps_log
     );
 
-    forge::BuildPlan plan =
-        builder.build();
+    forge::BuildPlan plan;
+
+
+    try
+    {
+        if(options.targets.empty())
+        {
+            plan =
+                builder.build();
+        }
+        else
+        {
+            plan =
+                builder.build(
+                    options.targets
+                );
+        }
+    }
+    catch(const std::exception& exception)
+    {
+        std::cerr
+            << "failed to create build plan: "
+            << exception.what()
+            << '\n';
+
+
+        return 1;
+    }
 
     std::cout
         << "planned edge count: "

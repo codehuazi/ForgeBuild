@@ -569,6 +569,14 @@ if(BUILD_TESTING)
             "$<TARGET_FILE:forge>"
     )
 
+    add_test(
+        NAME target_selection
+        COMMAND
+            bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/target_selection_test.sh"
+            "$<TARGET_FILE:forge>"
+    )
+
 
     set_tests_properties(
         scheduler_guard
@@ -599,6 +607,7 @@ if(BUILD_TESTING)
         interrupted_state
         manifest_multi_output
         concurrent_build_lock
+        target_selection
         PROPERTIES
             TIMEOUT 15
     )
