@@ -10,11 +10,13 @@
 #include "forge/local_cache.hpp"
 #include "forge/edge.hpp"
 #include "forge/file_system.hpp"
+#include "forge/build_directory_lock.hpp"
 
 #include <iostream>
 #include <string>
 #include <filesystem>
 #include <exception>
+#include <cerrno>
 
 
 namespace
@@ -295,6 +297,38 @@ int main(
         return 1;
     }
 
+
+    const std::string build_lock_path =
+        ".forge_lock";
+
+
+    forge::BuildDirectoryLock
+        build_directory_lock(
+            build_lock_path
+        );
+
+
+    if(!build_directory_lock.try_acquire())
+    {
+        if(build_directory_lock.error_number()
+            == EWOULDBLOCK)
+        {
+            std::cerr
+                << "another ForgeBuild process is already using "
+                << "this build directory\n";
+        }
+        else
+        {
+            std::cerr
+                << "failed to acquire build directory lock"
+                << " (error "
+                << build_directory_lock.error_number()
+                << ")\n";
+        }
+
+
+        return 1;
+    }
 
     /*
      * 第二阶段：

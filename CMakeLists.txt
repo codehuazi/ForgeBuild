@@ -24,6 +24,7 @@ add_library(
         src/edge.cpp
         src/build_graph.cpp
         src/build_graph_validator.cpp
+        src/build_directory_lock.cpp
         src/build_plan.cpp
         src/manifest.cpp
         src/string_utils.cpp
@@ -405,6 +406,18 @@ target_link_libraries(
         forge_core
 )
 
+add_executable(
+    build_directory_lock_demo
+    tests/build_directory_lock_demo.cpp
+)
+
+
+target_link_libraries(
+    build_directory_lock_demo
+    PRIVATE
+        forge_core
+)
+
 if(BUILD_TESTING)
     add_test(
         NAME scheduler_guard
@@ -542,6 +555,20 @@ if(BUILD_TESTING)
         COMMAND process_runner_demo
     )
 
+    add_test(
+        NAME build_directory_lock
+        COMMAND build_directory_lock_demo
+    )
+
+
+    add_test(
+        NAME concurrent_build_lock
+        COMMAND
+            bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/concurrent_build_lock_test.sh"
+            "$<TARGET_FILE:forge>"
+    )
+
 
     set_tests_properties(
         scheduler_guard
@@ -556,6 +583,7 @@ if(BUILD_TESTING)
         cycle_detection
         parser_error
         process_runner
+        build_directory_lock
         PROPERTIES
             TIMEOUT 5
     )
@@ -570,6 +598,7 @@ if(BUILD_TESTING)
         corrupted_persisted_state
         interrupted_state
         manifest_multi_output
+        concurrent_build_lock
         PROPERTIES
             TIMEOUT 15
     )
